@@ -1,0 +1,17 @@
+name: Compilar APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: unzip -q yotuve.zip
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.11.1" }
+      - run: cd yotuve && gradle assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yotuve-apk
+          path: yotuve/app/build/outputs/apk/release/*.apk
