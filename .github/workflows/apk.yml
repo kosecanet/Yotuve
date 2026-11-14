@@ -5,13 +5,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: unzip -q -o "$(ls *.zip | head -1)"
+      - name: Preparar proyecto
+        run: |
+          Z=$(find . -name "*.zip" | head -1)
+          echo "Zip: $Z"
+          if [ -n "$Z" ]; then unzip -q -o "$Z" -d src; fi
+          F=$(find . -name settings.gradle.kts | head -1)
+          echo "Proyecto en: $F"
+          echo "PROJ=$(dirname "$F")" >> $GITHUB_ENV
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.11.1" }
-      - run: cd yotuve && gradle assembleRelease --no-daemon
+      - run: gradle assembleRelease --no-daemon
+        working-directory: ${{ env.PROJ }}
       - uses: actions/upload-artifact@v4
         with:
           name: yotuve-apk
-          path: yotuve/app/build/outputs/apk/release/*.apk
+          path: ${{ env.PROJ }}/app/build/outputs/apk/release/*.apk
