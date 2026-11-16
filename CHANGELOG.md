@@ -2,6 +2,12 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Canciones «auto» como un DJ
+
+- Estilo parecido pero variando de artista (penaliza repetir los artistas de las últimas canciones).
+- Prioriza las canciones más populares y las grabaciones de estudio (audio oficial y canales «- Topic»).
+- Descarta directos, conciertos, sesiones, karaoke, covers, versiones aceleradas/8D y recopilatorios.
+
 ## 16/11/2026 · Me gusta / No me gusta y radio infinita en el modo música
 
 - Botones **Me gusta** y **No me gusta** en la canción que suena; se guarda un registro en el móvil.

@@ -177,6 +177,110 @@ object Music {
         }
     }
 
+    /** Versiones que no queremos en la radio: directos, conciertos, karaoke, versiones aceleradas… */
+    private val BAD = Regex("""\b(live|en vivo|en directo|directo|concierto|concert|tour|festival|session|sesi[oó]n|""" +
+        """karaoke|cover|reacci[oó]n|reaction|tutorial|8d|slowed|reverb|sped ?up|nightcore|instrumental|""" +
+        """full album|álbum completo|album completo|mix \d{4}|1 hora|1 hour|loop)\b""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Elige la siguiente canción "como un DJ":
+     * - parecida en estilo: sale de las recomendaciones de YouTube para la canción actual y para las que te gustan
+     * - variando: penaliza el mismo artista que las últimas canciones (no tiene por qué ser del mismo autor)
+     * - popular: puntúa por visualizaciones (lo que más gusta suele ser lo más visto)
+     * - bien grabada: fuera directos, conciertos, karaoke, versiones aceleradas…; premia audio oficial y
+     *   los canales «- Topic» de YouTube (grabaciones de estudio)
+     * - nunca repite ni añade nada que no te guste
+     */
+    private suspend fun pickRelated(): Track? {
+        val liked = ratings.values.filter { it.r == 1 }
+        val disliked = ratings.values.filter { it.r == -1 }
+        val likedArtists = liked.map { artistKey(it.artist) }.toSet()
+        val badArtists = disliked.map { artistKey(it.artist) }.toSet()
+        val used = queue.mapNotNull { it.id }.toSet() + disliked.map { it.id }
+        val recentArtists = queue.take(index + 1).takeLast(4).map { artistKey(it.artist) }
+        val seeds = (listOfNotNull(current?.id) + liked.shuffled().take(2).map { it.id }).distinct()
+        val cands = kotlinx.coroutines.coroutineScope {
+            seeds.mapIndexed { si, id -> kotlinx.coroutines.async {
+                runCatching { Innertube.related(id) }.getOrDefault(emptyList()).mapIndexed { i, v -> Triple(v, si, i) }
+            } }.flatMap { it.await() }
+        }.filter { (v, _, _) -> v.id !in used && (v.duration == null || v.duration in 90..480) && !BAD.containsMatchIn(v.title) }
+            .distinctBy { it.first.id }
+        if (cands.isEmpty()) return null
+        fun score(c: Triple<Video, Int, Int>): Double {
+            val (v, si, i) = c
+            val a = artistKey(v.channel)
+            val t = v.title.lowercase()
+            var sc = kotlin.math.ln((v.views ?: 10_000L).toDouble() + 1) * 0.6          // popularidad
+            if (v.channel.endsWith("- Topic")) sc += 2.0                                  // grabación de estudio
+            if ("official audio" in t || "audio oficial" in t) sc += 1.5
+            else if ("official video" in t || "video oficial" in t || "videoclip" in t) sc += 0.8
+            if ((v.views ?: 0) < 50_000) sc -= 3.0                                        // poco conocida
+            if (a in likedArtists) sc += 1.0                                              // te gusta, pero sin repetir
+            if (a in badArtists) sc -= 6.0
+            val repeats = recentArtists.count { it == a }
+            sc -= repeats * 3.5                                                           // variar de artista
+            sc -= i * 0.15 + si * 0.4                                                     // cercanía de estilo
+            return sc + Math.random() * 1.2                                               // un poco de sorpresa
+        }
+        val best = cands.maxBy(::score).first
+        return Track(best.id, cleanTitle(best.title), best.channel.removeSuffix(" - Topic"), best.duration, auto = true)
+    }
+
+    /** Clave del artista (sin "- Topic", "VEVO", mayúsculas…) para comparar. */
+    private fun artistKey(a: String) = a.lowercase().removeSuffix(" - topic").replace("vevo", "").trim()
+
+    /** Quita del título lo que sobra: "(Official Video)", "[HD]"… */
+    private fun cleanTitle(t: String) = t.replace(Regex("""\s*[\(\[][^\)\]]*(official|oficial|video|audio|lyric|letra|hd|4k)[^\)\]]*[\)\]]""",
+        RegexOption.IGNORE_CASE), "").trim().ifBlank { t }
+
+    /** Busca en YouTube la canción si aún no tiene vídeo (p. ej. viene de Spotify). */
+    private suspend fun resolve(i: Int): Track? {
+        val t = queue.getOrNull(i) ?: return null
+        if (t.id != null) return t
+        val found = runCatching { Innertube.search("${t.artist} ${t.title} audio") }.getOrDefault(emptyList())
+        val best = found.firstOrNull { v -> t.duration == null || v.duration == null || kotlin.math.abs(v.duration - t.duration) <= 20 }
+            ?: found.firstOrNull() ?: return null
+        val r = t.copy(id = best.id, thumb = best.thumb, duration = t.duration ?: best.duration)
+        if (queue.getOrNull(i) == t) { queue = queue.toMutableList().also { it[i] = r }; save() }
+        return r
+    }
+
+    /** Solo el audio de la canción (menos datos y batería que el vídeo). */
+    private suspend fun source(i: Int): androidx.media3.exoplayer.source.MediaSource? {
+        val t = resolve(i) ?: return null
+        val v = Video(t.id!!, t.title, t.artist, t.duration, null, t.thumb ?: "")
+        val st = runCatching { Repo.fastStreams(v) }.getOrNull() ?: return null
+        val url = st.audio ?: st.video
+        val meta = MediaMetadata.Builder().setTitle(t.title).setArtist(t.artist)
+            .setArtworkUri(t.thumb?.let { android.net.Uri.parse(it) }).build()
+        return PlayerCache.audioSource(App.instance, "music-${t.id}", url, st.ua,
+            MediaItem.Builder().setUri(url).setMediaId("music-${t.id}").setMediaMetadata(meta))
+    }
+
+    private fun nextIndex(from: Int = index): Int? {
+        if (queue.isEmpty()) return null
+        val ok = queue.indices.filter { ratingOf(queue[it]) != -1 }
+        if (shuffle && ok.size > 1) return (ok - from).randomOrNull()
+        ok.firstOrNull { it > from }?.let { return it }
+        return if (repeat == 1) ok.firstOrNull() else null
+    }
+
+    // ---------- Al acabarse la lista: canciones relacionadas, una tras otra, sin repetir
+    private var autoBusy = false
+
+    /**
+     * Si la canción actual es la última, añade ya una relacionada (así la siguiente está precargada).
+     * Se elige a partir de la canción actual y de algunas que te gustan; nunca repite ni añade las que no te gustan,
+     * y da prioridad a artistas que te gustan.
+     */
+    private fun ensureNext() {
+        if (repeat != 0 || shuffle || nextIndex() != null || autoBusy) return
+        autoBusy = true
+        scope.launch {
+            try { pickRelated()?.let { add(it); preloadNext() } } finally { autoBusy = false }
+        }
+    }
+
     private suspend fun pickRelated(): Track? {
         val liked = ratings.values.filter { it.r == 1 }
         val disliked = ratings.values.filter { it.r == -1 }
