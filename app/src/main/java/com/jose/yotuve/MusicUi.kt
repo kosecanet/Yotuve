@@ -19,6 +19,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +49,9 @@ fun MusicScreen(onBack: () -> Unit) {
     var importOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    var drag by remember { mutableStateOf<Track?>(null) }        // canción que se está arrastrando
+    var dragOffset by remember { mutableStateOf(0f) }
+    val rowPx = with(androidx.compose.ui.platform.LocalDensity.current) { 60.dp.toPx() }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -54,8 +62,6 @@ fun MusicScreen(onBack: () -> Unit) {
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Más") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text(if (edit) "Terminar de editar" else "Editar lista") },
-                        onClick = { edit = !edit; menu = false })
                     DropdownMenuItem(text = { Text("Vaciar lista") }, onClick = { Music.clear(); menu = false })
                 }
             }
@@ -68,7 +74,8 @@ fun MusicScreen(onBack: () -> Unit) {
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Lista · ${Music.queue.size} canciones", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    if (edit) TextButton(onClick = { edit = false }) { Text("Hecho") }
+                    if (Music.queue.size > 1) Text("Arrastra ≡ para mover · desliza para quitar", color = MSub, fontSize = 11.sp,
+                        modifier = Modifier.padding(end = 8.dp))
                 }
             }
             if (Music.queue.isEmpty()) item {
@@ -92,7 +99,18 @@ fun MusicScreen(onBack: () -> Unit) {
                     }
                 }
             }
-            itemsIndexed(Music.queue, key = { i, t -> "$i-${t.title}" }) { i, t -> TrackRow(i, t, edit) }
+            itemsIndexed(Music.queue, key = { _, t -> System.identityHashCode(t) }) { i, t ->
+                TrackRow(i, t, edit, dragging = drag == t, dragOffset = if (drag == t) dragOffset else 0f,
+                    onDragStart = { drag = t; dragOffset = 0f },
+                    onDrag = { dy ->
+                        // Arrastrar: al pasar media fila, la canción cambia de sitio
+                        dragOffset += dy
+                        val from = Music.queue.indexOf(t)
+                        if (dragOffset > rowPx / 2 && from < Music.queue.size - 1) { Music.move(from, from + 1); dragOffset -= rowPx }
+                        else if (dragOffset < -rowPx / 2 && from > 0) { Music.move(from, from - 1); dragOffset += rowPx }
+                    },
+                    onDragEnd = { drag = null; dragOffset = 0f })
+            }
             item { Spacer(Modifier.height(80.dp)) }
         }
     }
@@ -212,31 +230,65 @@ private fun VibeBar() {
     }
 }
 
-/** Fila de la lista: nombre, artista y duración. En modo edición: subir, bajar y quitar. */
+/**
+ * Fila de la lista: nombre, artista y duración.
+ * - Mantener pulsada y arrastrar (o arrastrar desde ≡) para moverla.
+ * - Deslizar hacia un lado para quitarla.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TrackRow(i: Int, t: Track, edit: Boolean) {
+private fun TrackRow(i: Int, t: Track, edit: Boolean, dragging: Boolean, dragOffset: Float,
+                     onDragStart: () -> Unit, onDrag: (Float) -> Unit, onDragEnd: () -> Unit) {
     val isCurrent = i == Music.index
-    Row(Modifier.fillMaxWidth().clickable(enabled = !edit) { Music.playAt(i) }.padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
-            if (isCurrent && Music.active) Icon(Icons.Default.GraphicEq, null, tint = MRed, modifier = Modifier.size(18.dp))
-            else Text("${i + 1}", color = MSub, fontSize = 13.sp)
-        }
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(t.title, color = if (isCurrent) MRed else Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(t.artist.ifBlank { null }, t.duration?.let { fmtDur(it) },
-                if (t.auto) "auto" else null).joinToString(" · "),
-                color = MSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        if (edit) {
-            IconButton(onClick = { Music.move(i, i - 1) }, enabled = i > 0) { Icon(Icons.Default.KeyboardArrowUp, "Subir") }
-            IconButton(onClick = { Music.move(i, i + 1) }, enabled = i < Music.queue.size - 1) { Icon(Icons.Default.KeyboardArrowDown, "Bajar") }
-            IconButton(onClick = { Music.remove(i) }) { Icon(Icons.Default.Close, "Quitar", tint = MSub) }
-        } else {
+    val idx by rememberUpdatedState(i)
+    val swipe = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
+        if (v != SwipeToDismissBoxValue.Settled) { Music.remove(Music.queue.indexOf(t).takeIf { it >= 0 } ?: idx); true } else false
+    })
+    val dragMod = Modifier.pointerInput(Unit) {
+        detectDragGesturesAfterLongPress(
+            onDragStart = { onDragStart() },
+            onDrag = { change, amount -> change.consume(); onDrag(amount.y) },
+            onDragEnd = { onDragEnd() }, onDragCancel = { onDragEnd() })
+    }
+    SwipeToDismissBox(state = swipe, enableDismissFromStartToEnd = !dragging, enableDismissFromEndToStart = !dragging,
+        modifier = Modifier.zIndex(if (dragging) 1f else 0f).graphicsLayer { translationY = dragOffset },
+        backgroundContent = {
+            Box(Modifier.fillMaxSize().background(Color(0xFF8B1A1A)).padding(horizontal = 24.dp),
+                contentAlignment = if (swipe.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Delete, null, tint = Color.White)
+                    Spacer(Modifier.width(6.dp)); Text("Quitar", color = Color.White)
+                }
+            }
+        }) {
+        Row(Modifier.fillMaxWidth().height(60.dp)
+            .background(if (dragging) Color(0xFF2A2A2A) else Color(0xFF111111))
+            .then(dragMod)
+            .clickable(enabled = !edit && !dragging) { Music.playAt(idx) }.padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
+                if (isCurrent && Music.active) Icon(Icons.Default.GraphicEq, null, tint = MRed, modifier = Modifier.size(18.dp))
+                else Text("${i + 1}", color = MSub, fontSize = 13.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(t.title, color = if (isCurrent) MRed else Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(listOfNotNull(t.artist.ifBlank { null }, t.duration?.let { fmtDur(it) },
+                    if (t.auto) "auto" else null).joinToString(" · "),
+                    color = MSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             when (Music.ratingOf(t)) {
                 1 -> Icon(Icons.Default.ThumbUp, "Me gusta", tint = MRed, modifier = Modifier.size(16.dp))
                 -1 -> Icon(Icons.Default.ThumbDown, "No me gusta", tint = MSub, modifier = Modifier.size(16.dp))
+            }
+            // Asa para arrastrar sin tener que mantener pulsado
+            Box(Modifier.size(44.dp).pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { onDragStart() },
+                    onDrag = { change, amount -> change.consume(); onDrag(amount.y) },
+                    onDragEnd = { onDragEnd() }, onDragCancel = { onDragEnd() })
+            }, contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.DragHandle, "Mover", tint = MSub)
             }
         }
     }

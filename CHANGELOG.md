@@ -7,6 +7,7 @@ La sección de arriba es la de la próxima versión: se usa como notas al public
 - Barra de texto «Ambiente» en el modo música: una frase (p. ej. «años 80», «alegre», «para correr») que guía
   las canciones que se añaden solas, mezclándola con el estilo de lo que suena y de lo que te gusta.
 - Al cambiarla, las canciones auto que aún no han sonado se rehacen con el nuevo ambiente.
+- Lista: arrastrar (desde ≡ o manteniendo pulsada la canción) para moverla y deslizar a un lado para quitarla.
 
 ## 16/11/2026 · Modo música con YouTube Music
 
