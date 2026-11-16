@@ -2,6 +2,12 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Inicio basado en lo último que has visto
+
+- El inicio mezcla lo que YouTube recomienda para tus 3 últimos vídeos (el más reciente pesa más) con lo más
+  visto esta semana sobre sus temas: tendencias sobre lo que ves.
+- Se carga por peticiones directas a YouTube (más rápido, sin Python); sin repetir lo visto y con variedad de canales.
+
 ## 16/11/2026 · Calidad adaptativa (arranque casi inmediato)
 
 - El reproductor recibe todas las calidades a la vez (DASH, como NewPipe): empieza en una calidad baja para

@@ -312,19 +312,29 @@ object Repo {
     }
 
     /**
-     * Inicio personalizado: Mixes de 3 vídeos al azar de los últimos que has visto, temas de lo que ves
-     * en otros canales, un canal favorito y algo de lo más popular; máx. 2 por canal y sin repetir lo visto.
+     * Inicio basado en lo último que has visto, como "tendencias sobre ello":
+     * - lo que YouTube recomienda para tus 3 últimos vídeos (cuanto más reciente, más peso)
+     * - lo más visto ESTA SEMANA sobre los temas de tus últimos vídeos
+     * Todo por peticiones directas (rápido, sin Python), sin repetir lo visto, máx. 2 por canal y lo nuevo arriba.
      */
-    suspend fun home(history: List<Video>): List<Video> {
-        if (history.isEmpty()) return diversify(search("tendencias", 15), max = 2).take(10)
-        val recent = history.take(10).shuffled().take(3)
-        val topics = history.take(8).shuffled().take(2).map(::keywords).filter { it.isNotBlank() }
-        val channel = history.map { it.channel }.filter { it.isNotBlank() }.distinct().take(3).shuffled().firstOrNull()
-        val urls = recent.map { mix(it.id) } + topics.map { "ytsearch8:$it" } +
-            listOfNotNull(channel?.let { "ytsearch5:$it" }) + "ytsearch8:vídeos populares hoy"
+    suspend fun home(history: List<Video>): List<Video> = kotlinx.coroutines.coroutineScope {
+        if (history.isEmpty())
+            return@coroutineScope diversify(rankFresh(runCatching { Innertube.search("tendencias", params = Innertube.THIS_WEEK) }
+                .getOrDefault(emptyList()).ifEmpty { search("tendencias", 15) }), max = 2).take(10)
+        val recent = history.take(3)
+        val topics = history.take(4).map(::keywords).filter { it.isNotBlank() }.distinct().take(2)
+        val rel = recent.map { v -> async { runCatching { Innertube.related(v.id).take(12) }.getOrDefault(emptyList()) } }
+        val trend = topics.map { t -> async { runCatching { Innertube.search(t, params = Innertube.THIS_WEEK).take(10) }.getOrDefault(emptyList()) } }
+        // Orden de mezcla: recomendados del último vídeo, tendencias del tema más reciente, recomendados del penúltimo…
+        val r = rel.map { it.await() }; val t = trend.map { it.await() }
+        val lists = listOfNotNull(r.getOrNull(0), t.getOrNull(0), r.getOrNull(1), t.getOrNull(1), r.getOrNull(2))
         val seen = history.map { it.id }.toSet()
-        val feed = diversify(rankFresh(interleave(fetch(urls, 8)).filter { it.id !in seen }), max = 2, min = 10).take(10)
-        return feed.ifEmpty { search("tendencias", 10) }
+        val feed = diversify(rankFresh(interleave(lists).filter { it.id !in seen }), max = 2, min = 10).take(10)
+        if (feed.size >= 6) return@coroutineScope feed
+        // Respaldo (si YouTube no respondió): el método anterior con yt-dlp
+        val urls = recent.map { mix(it.id) } + topics.map { "ytsearch8:$it" }
+        diversify(rankFresh(interleave(fetch(urls, 8)).filter { it.id !in seen }), max = 2, min = 10).take(10)
+            .ifEmpty { search("tendencias", 10) }
     }
 
     /** 10 Shorts relacionados con lo que ves (temas y canales del historial), de hasta 3 minutos. */

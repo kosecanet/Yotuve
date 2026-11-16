@@ -20,13 +20,19 @@ object Innertube {
     private fun country() = java.util.Locale.getDefault().country.ifBlank { "ES" }
 
     /** Busca [q]. Con [next] = true devuelve la página siguiente de la última búsqueda de [q]. */
-    suspend fun search(q: String, next: Boolean = false): List<Video> = withContext(Dispatchers.IO) {
+    /** Filtro de YouTube "subidos esta semana" (para tendencias sobre un tema). */
+    const val THIS_WEEK = "EgIIAw%3D%3D"
+
+    suspend fun search(q: String, next: Boolean = false, params: String? = null): List<Video> = withContext(Dispatchers.IO) {
         val body = JSONObject().put("context", JSONObject().put("client", JSONObject()
             .put("clientName", "WEB").put("clientVersion", VERSION).put("hl", lang()).put("gl", country())))
         if (next) {
             val token = synchronized(conts) { conts[q] } ?: return@withContext emptyList()
             body.put("continuation", token)
-        } else body.put("query", q)
+        } else {
+            body.put("query", q)
+            params?.let { body.put("params", java.net.URLDecoder.decode(it, "UTF-8")) }
+        }
         val c = (URL("https://www.youtube.com/youtubei/v1/search?prettyPrint=false").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"; doOutput = true
             connectTimeout = 8000; readTimeout = 10000
@@ -226,6 +232,19 @@ object Innertube {
         }
         sb.append("</AdaptationSet></Period></MPD>")
         return sb.toString()
+    }
+
+    /** Solo los recomendados de YouTube para un vídeo (una petición rápida, sin Python). */
+    suspend fun related(id: String): List<Video> = withContext(Dispatchers.IO) {
+        val next = post("next", JSONObject().put("context", ctx()).put("videoId", id))
+        val rel = ArrayList<Video>()
+        walk(next) { k, o ->
+            when (k) {
+                "compactVideoRenderer" -> parseVideo(o)?.let { rel += it }
+                "lockupViewModel" -> parseLockup(o)?.let { rel += it }
+            }
+        }
+        rel.filter { it.id != id }.distinctBy { it.id }
     }
 
     /** Recorre todo el JSON llamando a [f] con cada objeto y su clave. */
