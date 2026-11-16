@@ -134,7 +134,8 @@ object Music {
     private suspend fun resolve(i: Int): Track? {
         val t = queue.getOrNull(i) ?: return null
         if (t.id != null) return t
-        val found = runCatching { Innertube.search("${t.artist} ${t.title} audio") }.getOrDefault(emptyList())
+        val found = runCatching { Innertube.musicSearch("${t.artist} ${t.title}").map { it.video } }.getOrDefault(emptyList())
+            .ifEmpty { runCatching { Innertube.search("${t.artist} ${t.title} audio") }.getOrDefault(emptyList()) }
         val best = found.firstOrNull { v -> t.duration == null || v.duration == null || kotlin.math.abs(v.duration - t.duration) <= 20 }
             ?: found.firstOrNull() ?: return null
         val r = t.copy(id = best.id, thumb = best.thumb, duration = t.duration ?: best.duration)
@@ -199,31 +200,45 @@ object Music {
         val badArtists = disliked.map { artistKey(it.artist) }.toSet()
         val used = queue.mapNotNull { it.id }.toSet() + disliked.map { it.id }
         val recentArtists = queue.take(index + 1).takeLast(4).map { artistKey(it.artist) }
+        // Semillas: la canción actual (si es una canción de verdad) y un par de las que te gustan
         val seeds = (listOfNotNull(current?.id) + liked.shuffled().take(2).map { it.id }).distinct()
-        val cands = kotlinx.coroutines.coroutineScope {
+        val radio = kotlinx.coroutines.coroutineScope {
             seeds.mapIndexed { si, id -> async {
-                runCatching { Innertube.related(id) }.getOrDefault(emptyList()).mapIndexed { i, v -> Triple(v, si, i) }
+                runCatching { Innertube.musicRadio(id) }.getOrDefault(emptyList()).mapIndexed { i, s -> Triple(s, si, i) }
             } }.flatMap { it.await() }
-        }.filter { (v, _, _) -> v.id !in used && (v.duration == null || v.duration in 90..480) && !BAD.containsMatchIn(v.title) }
-            .distinctBy { it.first.id }
-        if (cands.isEmpty()) return null
-        fun score(c: Triple<Video, Int, Int>): Double {
-            val (v, si, i) = c
-            val a = artistKey(v.channel)
-            val t = v.title.lowercase()
-            var sc = kotlin.math.ln((v.views ?: 10_000L).toDouble() + 1) * 0.6          // popularidad
-            if (v.channel.endsWith("- Topic")) sc += 2.0                                  // grabación de estudio
-            if ("official audio" in t || "audio oficial" in t) sc += 1.5
-            else if ("official video" in t || "video oficial" in t || "videoclip" in t) sc += 0.8
-            if ((v.views ?: 0) < 50_000) sc -= 3.0                                        // poco conocida
-            if (a in likedArtists) sc += 1.0                                              // te gusta, pero sin repetir
-            if (a in badArtists) sc -= 6.0
-            val repeats = recentArtists.count { it == a }
-            sc -= repeats * 3.5                                                           // variar de artista
-            sc -= i * 0.15 + si * 0.4                                                     // cercanía de estilo
-            return sc + Math.random() * 1.2                                               // un poco de sorpresa
         }
-        val best = cands.maxBy(::score).first
+        // Solo canciones: estudio (ATV) o videoclip oficial (OMV); nada subido por usuarios, podcasts ni directos
+        val cands = radio.filter { (s, _, _) ->
+            val v = s.video
+            s.type in setOf("ATV", "OMV") && v.id !in used && (v.duration == null || v.duration in 90..480) &&
+                !BAD.containsMatchIn(v.title)
+        }.distinctBy { it.first.video.id }
+        if (cands.isEmpty()) return pickRelatedYoutube(used, recentArtists, likedArtists, badArtists)
+        fun score(c: Triple<Innertube.Song, Int, Int>): Double {
+            val (s, si, i) = c
+            val a = artistKey(s.video.channel)
+            var sc = if (s.type == "ATV") 2.0 else 1.0                       // grabación de estudio primero
+            if (a in likedArtists) sc += 1.0
+            if (a in badArtists) sc -= 6.0
+            sc -= recentArtists.count { it == a } * 3.5                       // variar de artista, como un DJ
+            sc -= i * 0.12 + si * 0.4                                         // la radio ya viene por parecido
+            return sc + Math.random() * 1.2
+        }
+        val best = cands.maxBy(::score).first.video
+        return Track(best.id, cleanTitle(best.title), best.channel, best.duration, auto = true)
+    }
+
+    /** Respaldo si YouTube Music no responde: recomendaciones normales de YouTube, filtradas. */
+    private suspend fun pickRelatedYoutube(used: Set<String>, recent: List<String>, liked: Set<String>, bad: Set<String>): Track? {
+        val id = current?.id ?: return null
+        val c = runCatching { Innertube.related(id) }.getOrDefault(emptyList())
+            .filter { it.id !in used && (it.duration == null || it.duration in 90..480) && !BAD.containsMatchIn(it.title) &&
+                (it.views ?: 0) >= 100_000 }
+        val best = c.maxByOrNull { v ->
+            val a = artistKey(v.channel)
+            kotlin.math.ln((v.views ?: 1L).toDouble()) * 0.5 + (if (v.channel.endsWith("- Topic")) 2.0 else 0.0) +
+                (if (a in liked) 1.0 else 0.0) - (if (a in bad) 6.0 else 0.0) - recent.count { it == a } * 3.5
+        } ?: return null
         return Track(best.id, cleanTitle(best.title), best.channel.removeSuffix(" - Topic"), best.duration, auto = true)
     }
 

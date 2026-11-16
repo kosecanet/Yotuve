@@ -2,6 +2,12 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Modo música con YouTube Music
+
+- Las canciones «auto» salen de la radio de YouTube Music: solo canciones (grabaciones de estudio primero y
+  videoclips oficiales), nada de vídeos de usuarios, podcasts ni entrevistas.
+- Las canciones de Spotify y el botón «+» buscan en YouTube Music (solo canciones).
+
 ## 16/11/2026 · Canciones «auto» como un DJ
 
 - Estilo parecido pero variando de artista (penaliza repetir los artistas de las últimas canciones).

@@ -229,7 +229,11 @@ private fun SearchAddDialog(onDismiss: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var added by remember { mutableStateOf(setOf<String>()) }
     fun go() { if (q.isBlank()) return; busy = true
-        scope.launch { res = runCatching { Innertube.search(q) }.getOrDefault(emptyList()).filter { (it.duration ?: 0) in 30..1200 }; busy = false } }
+        scope.launch {
+            res = runCatching { Innertube.musicSearch(q).map { it.video } }.getOrDefault(emptyList())
+                .ifEmpty { runCatching { Innertube.search(q) }.getOrDefault(emptyList()).filter { (it.duration ?: 0) in 30..1200 } }
+            busy = false
+        } }
     AlertDialog(onDismissRequest = onDismiss,
         title = { Text("Añadir canciones") },
         text = {

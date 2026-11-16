@@ -249,6 +249,84 @@ object Innertube {
         rel.filter { it.id != id }.distinctBy { it.id }
     }
 
+    // ---------- YouTube Music (solo canciones)
+    private const val MUSIC_VERSION = "1.20251110.01.00"
+
+    /** Tipo de vídeo en YouTube Music: ATV = grabación de estudio, OMV = videoclip oficial, UGC = subido por usuarios. */
+    data class Song(val video: Video, val type: String)
+
+    private fun musicPost(endpoint: String, body: JSONObject): JSONObject {
+        val c = (URL("https://music.youtube.com/youtubei/v1/$endpoint?prettyPrint=false").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; doOutput = true
+            connectTimeout = 6000; readTimeout = 8000
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36")
+            setRequestProperty("Origin", "https://music.youtube.com")
+            setRequestProperty("Referer", "https://music.youtube.com/")
+            setRequestProperty("X-YouTube-Client-Name", "67")
+            setRequestProperty("X-YouTube-Client-Version", MUSIC_VERSION)
+            setRequestProperty("Accept-Language", "${lang()}-${country()},${lang()};q=0.9")
+            setRequestProperty("Cookie", "SOCS=CAI; CONSENT=YES+cb")
+        }
+        c.outputStream.use { it.write(body.toString().toByteArray()) }
+        if (c.responseCode != 200) error("YouTube Music respondió ${c.responseCode}")
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+    }
+
+    private fun musicCtx() = JSONObject().put("client", JSONObject()
+        .put("clientName", "WEB_REMIX").put("clientVersion", MUSIC_VERSION).put("hl", lang()).put("gl", country()))
+
+    private fun musicType(o: JSONObject): String {
+        var t = ""
+        walk(o) { k, obj -> if (k == "watchEndpointMusicConfig" && t.isEmpty()) t = obj.optString("musicVideoType") }
+        return t.removePrefix("MUSIC_VIDEO_TYPE_")
+    }
+
+    /**
+     * La "radio" de YouTube Music para una canción: canciones de estilo parecido (como la cola de reproducción
+     * de YouTube Music). Solo canciones: cada una con su tipo (estudio, videoclip, usuario).
+     */
+    suspend fun musicRadio(id: String): List<Song> = withContext(Dispatchers.IO) {
+        val j = musicPost("next", JSONObject().put("context", musicCtx()).put("videoId", id)
+            .put("playlistId", "RDAMVM$id").put("isAudioOnly", true))
+        val out = ArrayList<Song>()
+        walk(j) { k, o ->
+            if (k == "playlistPanelVideoRenderer") {
+                val vid = o.optString("videoId").takeIf { it.length == 11 } ?: return@walk
+                val artist = o.optJSONObject("longBylineText")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text") ?: ""
+                out += Song(Video(vid, text(o.optJSONObject("title")) ?: "", artist,
+                    text(o.optJSONObject("lengthText"))?.let(::parseDuration), null,
+                    "https://i.ytimg.com/vi/$vid/hqdefault.jpg"), musicType(o))
+            }
+        }
+        out.filter { it.video.id != id }.distinctBy { it.video.id }
+    }
+
+    /** Buscar solo canciones en YouTube Music (para encontrar las de Spotify y el botón "+"). */
+    suspend fun musicSearch(q: String): List<Song> = withContext(Dispatchers.IO) {
+        val j = musicPost("search", JSONObject().put("context", musicCtx()).put("query", q)
+            .put("params", java.net.URLDecoder.decode("EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D", "UTF-8")))   // filtro "Canciones"
+        val out = ArrayList<Song>()
+        walk(j) { k, o ->
+            if (k == "musicResponsiveListItemRenderer") {
+                var vid: String? = o.optJSONObject("playlistItemData")?.optString("videoId")?.takeIf { it.length == 11 }
+                if (vid == null) walk(o) { kk, oo -> if (kk == "watchEndpoint" && vid == null) vid = oo.optString("videoId").takeIf { it.length == 11 } }
+                val id = vid ?: return@walk
+                val cols = o.optJSONArray("flexColumns") ?: return@walk
+                fun col(i: Int) = cols.optJSONObject(i)?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.optJSONObject("text")?.optJSONArray("runs")
+                val title = col(0)?.optJSONObject(0)?.optString("text") ?: return@walk
+                val runs = col(1)
+                val parts = (0 until (runs?.length() ?: 0)).map { runs!!.getJSONObject(it).optString("text") }
+                    .filter { it.isNotBlank() && it.trim() != "•" && it.trim() != "&" && it.trim() != "," }
+                val dur = parts.lastOrNull { Regex("""^\d+:\d\d(:\d\d)?$""").matches(it.trim()) }?.let(::parseDuration)
+                val artist = parts.firstOrNull { it != "Canción" && it != "Song" } ?: ""
+                out += Song(Video(id, title, artist, dur, null, "https://i.ytimg.com/vi/$id/hqdefault.jpg"), musicType(o).ifEmpty { "ATV" })
+            }
+        }
+        out.distinctBy { it.video.id }
+    }
+
     /** Recorre todo el JSON llamando a [f] con cada objeto y su clave. */
     private fun walk(o: Any?, f: (String, JSONObject) -> Unit) {
         when (o) {
