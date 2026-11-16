@@ -2,6 +2,12 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Ambiente para las canciones auto
+
+- Barra de texto «Ambiente» en el modo música: una frase (p. ej. «años 80», «alegre», «para correr») que guía
+  las canciones que se añaden solas, mezclándola con el estilo de lo que suena y de lo que te gusta.
+- Al cambiarla, las canciones auto que aún no han sonado se rehacen con el nuevo ambiente.
+
 ## 16/11/2026 · Modo música con YouTube Music
 
 - Las canciones «auto» salen de la radio de YouTube Music: solo canciones (grabaciones de estudio primero y

@@ -64,6 +64,7 @@ fun MusicScreen(onBack: () -> Unit) {
 
         LazyColumn(Modifier.fillMaxSize()) {
             item { NowPlaying() }
+            item { VibeBar() }
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Lista · ${Music.queue.size} canciones", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -179,6 +180,35 @@ private fun NowPlaying() {
                     tint = if (Music.repeat > 0) MRed else Color.White)
             }
         }
+    }
+}
+
+/** Barra de "ambiente": una frase que guía las canciones auto (p. ej. "años 80", "alegre", "para correr"). */
+@Composable
+private fun VibeBar() {
+    var text by remember { mutableStateOf(Music.vibe) }
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    fun apply() { Music.updateVibe(text); focus.clearFocus() }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        OutlinedTextField(
+            value = text, onValueChange = { text = it }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            leadingIcon = { Icon(Icons.Default.AutoAwesome, null, tint = if (Music.vibe.isNotBlank()) MRed else MSub) },
+            placeholder = { Text("Ambiente: años 80, alegre, para correr…", color = MSub) },
+            trailingIcon = {
+                if (text.isNotEmpty()) IconButton(onClick = { text = ""; Music.updateVibe(""); focus.clearFocus() }) {
+                    Icon(Icons.Default.Close, "Quitar")
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { apply() }),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.White, unfocusedBorderColor = Color(0xFF4D4D4D),
+                cursorColor = Color.White),
+        )
+        Text(if (Music.vibe.isBlank()) "Escribe un ambiente y las canciones que se añaden solas lo seguirán"
+            else "Las canciones auto siguen el ambiente «${Music.vibe}»", color = MSub, fontSize = 11.sp,
+            modifier = Modifier.padding(start = 12.dp, top = 2.dp))
     }
 }
 

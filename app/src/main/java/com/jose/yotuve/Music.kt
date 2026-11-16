@@ -49,6 +49,8 @@ object Music {
     var repeat by mutableStateOf(0)          // 0 no, 1 toda la lista, 2 una canción
     var status by mutableStateOf<String?>(null)
     var loading by mutableStateOf(false)
+    /** Frase de referencia para las canciones auto (p. ej. "años 80", "alegre"). */
+    var vibe by mutableStateOf("")
 
     val current get() = queue.getOrNull(index)
     /** Lo pone la app: al empezar la música se cierra el vídeo que hubiera. */
@@ -68,6 +70,7 @@ object Music {
             }
             index = prefs().getInt("i", if (queue.isEmpty()) -1 else 0).coerceIn(-1, queue.size - 1)
             shuffle = prefs().getBoolean("shuffle", false); repeat = prefs().getInt("repeat", 0)
+            vibe = prefs().getString("ambiente", "") ?: ""
             val r = JSONArray(prefs().getString("valoraciones", "[]"))
             ratings = (0 until r.length()).map { r.getJSONObject(it) }
                 .associate { it.getString("id") to Rating(it.getString("id"), it.getInt("r"), it.optString("t"), it.optString("a")) }
@@ -81,7 +84,7 @@ object Music {
         val r = JSONArray()
         ratings.values.forEach { r.put(JSONObject().put("id", it.id).put("r", it.r).put("t", it.title).put("a", it.artist)) }
         prefs().edit().putString("valoraciones", r.toString()).apply()
-        prefs().edit().putString("cola", a.toString()).putInt("i", index)
+        prefs().edit().putString("cola", a.toString()).putInt("i", index).putString("ambiente", vibe)
             .putBoolean("shuffle", shuffle).putInt("repeat", repeat).apply()
     }
 
@@ -102,6 +105,15 @@ object Music {
         val m = ratings.toMutableMap()
         if (m[id]?.r == r) m.remove(id) else m[id] = Rating(id, r, t.title, t.artist)
         ratings = m; save()
+    }
+
+    /** Cambia la frase de ambiente; las canciones auto que aún no han sonado se rehacen con ella. */
+    fun updateVibe(v: String) {
+        vibe = v.trim()
+        val keep = queue.withIndex().filter { (i, t) -> !(t.auto && i > index) }.map { it.value }
+        if (keep.size != queue.size) { queue = keep; preloaded = null }
+        save()
+        if (active) ensureNext()
     }
 
     // ---------- Editar la lista
@@ -207,8 +219,16 @@ object Music {
                 runCatching { Innertube.musicRadio(id) }.getOrDefault(emptyList()).mapIndexed { i, s -> Triple(s, si, i) }
             } }.flatMap { it.await() }
         }
+        // Ambiente: canciones que encajan con la frase (sola y junto al artista actual, para no alejarse del estilo)
+        val vibeWords = vibe.lowercase().split(Regex("""\s+""")).filter { it.length > 2 }.toSet()
+        val vibeSongs = if (vibe.isBlank()) emptyList() else kotlinx.coroutines.coroutineScope {
+            listOfNotNull(vibe, current?.artist?.takeIf { it.isNotBlank() }?.let { "$it $vibe" },
+                liked.randomOrNull()?.artist?.let { "$it $vibe" })
+                .map { q -> async { runCatching { Innertube.musicSearch(q) }.getOrDefault(emptyList()) } }
+                .flatMap { it.await() }.mapIndexed { i, s -> Triple(s, 9, i) }   // 9 = viene del ambiente
+        }
         // Solo canciones: estudio (ATV) o videoclip oficial (OMV); nada subido por usuarios, podcasts ni directos
-        val cands = radio.filter { (s, _, _) ->
+        val cands = (radio + vibeSongs).filter { (s, _, _) ->
             val v = s.video
             s.type in setOf("ATV", "OMV") && v.id !in used && (v.duration == null || v.duration in 90..480) &&
                 !BAD.containsMatchIn(v.title)
@@ -218,10 +238,15 @@ object Music {
             val (s, si, i) = c
             val a = artistKey(s.video.channel)
             var sc = if (s.type == "ATV") 2.0 else 1.0                       // grabación de estudio primero
+            if (vibe.isNotBlank()) {                                          // encaja con el ambiente
+                if (si == 9) sc += 3.0 - i * 0.05
+                val txt = (s.video.title + " " + s.video.channel).lowercase()
+                sc += vibeWords.count { it in txt } * 1.0
+            }
             if (a in likedArtists) sc += 1.0
             if (a in badArtists) sc -= 6.0
             sc -= recentArtists.count { it == a } * 3.5                       // variar de artista, como un DJ
-            sc -= i * 0.12 + si * 0.4                                         // la radio ya viene por parecido
+            if (si != 9) sc -= i * 0.12 + si * 0.4                            // la radio ya viene por parecido
             return sc + Math.random() * 1.2
         }
         val best = cands.maxBy(::score).first.video
