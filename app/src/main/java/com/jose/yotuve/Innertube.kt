@@ -180,10 +180,52 @@ object Innertube {
             .sortedBy { it.height }
         val audio = adaptive.filter { it.optString("mimeType").startsWith("audio/mp4") }.maxByOrNull { it.optLong("bitrate") }
         if (videos.isNotEmpty() && audio != null)
-            return@withContext Streams(videos.last().url, audio.getString("url"), v.title, videos, c.ua)
+            return@withContext Streams(videos.last().url, audio.getString("url"), v.title, videos, c.ua,
+                dash = runCatching { dashManifest(adaptive, maxHeight) }.getOrNull())
         // Solo calidad básica (vídeo+audio juntos, 360p): sirve para empezar ya; luego se sube de calidad
         val prog = list(sd.optJSONArray("formats")).maxByOrNull { it.optInt("height") } ?: return@withContext null
         Streams(prog.getString("url"), null, v.title, emptyList(), c.ua)
+    }
+
+    /**
+     * Manifiesto DASH (como hace NewPipe) con todas las calidades H.264 y el audio. Con él, el reproductor
+     * arranca en una calidad baja (empieza al instante) y va subiendo sola sin cortes según la conexión
+     * y el tamaño de la pantalla. null si a algún formato le faltan los datos necesarios.
+     */
+    private fun dashManifest(adaptive: List<JSONObject>, maxHeight: Int): String? {
+        fun range(o: JSONObject, k: String) = o.optJSONObject(k)?.let { "${it.optString("start")}-${it.optString("end")}" }
+        fun codecs(o: JSONObject) = Regex("""codecs="([^"]+)"""").find(o.optString("mimeType"))?.groupValues?.get(1)
+        fun esc(u: String) = u.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+        val ok = adaptive.filter { range(it, "initRange") != null && range(it, "indexRange") != null && codecs(it) != null }
+        val vids = ok.filter { "avc1" in it.optString("mimeType") && it.optInt("height") in 144..maxHeight }
+            .groupBy { it.optInt("height") }.map { (_, l) -> l.maxBy { it.optLong("bitrate") } }
+        var auds = ok.filter { it.optString("mimeType").startsWith("audio/mp4") }
+        // Vídeos con varios idiomas de audio: solo el original
+        if (auds.any { it.has("audioTrack") }) auds = auds.filter { it.optJSONObject("audioTrack")?.optBoolean("audioIsDefault") == true }
+        auds = auds.filter { "drc" !in it.optString("xtags") }
+        if (vids.isEmpty() || auds.isEmpty()) return null
+        val durMs = (vids + auds).firstNotNullOfOrNull { it.optString("approxDurationMs").toLongOrNull() } ?: return null
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" """)
+        sb.append("""profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static" minBufferTime="PT1.5S" """)
+        sb.append("""mediaPresentationDuration="PT${durMs / 1000.0}S"><Period>""")
+        sb.append("""<AdaptationSet mimeType="video/mp4" subsegmentAlignment="true">""")
+        for (f in vids) {
+            sb.append("""<Representation id="v${f.optInt("itag")}" codecs="${codecs(f)}" bandwidth="${f.optLong("bitrate")}" """)
+            sb.append("""width="${f.optInt("width")}" height="${f.optInt("height")}" frameRate="${f.optInt("fps", 30)}">""")
+            sb.append("<BaseURL>${esc(f.getString("url"))}</BaseURL>")
+            sb.append("""<SegmentBase indexRange="${range(f, "indexRange")}"><Initialization range="${range(f, "initRange")}"/></SegmentBase></Representation>""")
+        }
+        sb.append("</AdaptationSet><AdaptationSet mimeType=\"audio/mp4\" subsegmentAlignment=\"true\">")
+        for (f in auds) {
+            sb.append("""<Representation id="a${f.optInt("itag")}" codecs="${codecs(f)}" bandwidth="${f.optLong("bitrate")}" """)
+            sb.append("""audioSamplingRate="${f.optString("audioSampleRate", "44100")}">""")
+            sb.append("""<AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="${f.optInt("audioChannels", 2)}"/>""")
+            sb.append("<BaseURL>${esc(f.getString("url"))}</BaseURL>")
+            sb.append("""<SegmentBase indexRange="${range(f, "indexRange")}"><Initialization range="${range(f, "initRange")}"/></SegmentBase></Representation>""")
+        }
+        sb.append("</AdaptationSet></Period></MPD>")
+        return sb.toString()
     }
 
     /** Recorre todo el JSON llamando a [f] con cada objeto y su clave. */

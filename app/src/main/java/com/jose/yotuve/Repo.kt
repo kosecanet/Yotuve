@@ -55,7 +55,8 @@ data class VFormat(val height: Int, val url: String)
  * [videos] son todas las calidades H.264 disponibles, para cambiar de calidad sin volver a llamar a yt-dlp.
  */
 data class Streams(val video: String, val audio: String?, val title: String, val videos: List<VFormat> = emptyList(),
-                   val ua: String? = null /* User-Agent con el que se pidieron (enlaces directos) */) {
+                   val ua: String? = null /* User-Agent con el que se pidieron (enlaces directos) */,
+                   val dash: String? = null /* manifiesto con TODAS las calidades: el reproductor elige y sube solo */) {
     /** El formato más pequeño que cubra [target] píxeles de alto (o el mayor si ninguno llega). */
     fun videoFor(target: Int): String {
         if (videos.isEmpty() || audio == null) return video

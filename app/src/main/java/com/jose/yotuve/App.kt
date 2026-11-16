@@ -25,6 +25,13 @@ class App : Application() {
             prev?.uncaughtException(t, e)
         }
         scope.launch { kotlinx.coroutines.delay(3000); Updater.check(this@App) }   // ¿hay versión nueva de yotuve?
+        // Deja abierta la conexión con YouTube (DNS + cifrado): el primer vídeo arranca antes
+        scope.launch {
+            runCatching {
+                (java.net.URL("https://www.youtube.com/generate_204").openConnection() as java.net.HttpURLConnection)
+                    .apply { connectTimeout = 4000; readTimeout = 4000 }.inputStream.close()
+            }
+        }
         scope.launch {
             try {
                 YoutubeDL.getInstance().init(this@App)

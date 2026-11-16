@@ -2,6 +2,13 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Calidad adaptativa (arranque casi inmediato)
+
+- El reproductor recibe todas las calidades a la vez (DASH, como NewPipe): empieza en una calidad baja para
+  arrancar al instante y sube sola, sin cortes, según la conexión y el tamaño en pantalla.
+- Búfer mínimo para empezar a reproducir: 0,4 s (antes 0,7 s).
+- Al abrir la app se deja preparada la conexión con YouTube: el primer vídeo arranca antes.
+
 ## 16/11/2026 · Vídeos que arrancan mucho antes
 
 - El vídeo es lo primero: los enlaces se piden directamente a YouTube (una petición, sin arrancar Python/yt-dlp).

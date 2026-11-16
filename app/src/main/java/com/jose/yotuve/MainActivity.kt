@@ -434,6 +434,7 @@ class MainVM : ViewModel() {
         val p = PlayerHolder.get(ctx)
         attachListener(p)
         val url = st.videoFor(Quality.target(ctx, fullscreen, pip))
+        Quality.limit(if (st.dash != null) Quality.target(ctx, fullscreen, pip) else 4320)
         val pos = start ?: Positions.get(v.id)
         val fadeIn = crossfade; crossfade = false
         if (fadeIn) {
@@ -908,6 +909,7 @@ fun PlayerScreen(vm: MainVM, v: Video) {
     val target = Quality.target(ctx, vm.fullscreen, vm.pip)
     LaunchedEffect(vm.streams, target) {
         val st = vm.streams ?: return@LaunchedEffect
+        if (st.dash != null) { Quality.limit(target); return@LaunchedEffect }   // DASH: calidad automática
         val url = st.videoFor(target)
         if (PlayerHolder.loadedId == v.id && PlayerHolder.loadedUrl != url) {
             // Cambio de calidad (pantalla completa / flotante) en el mismo punto

@@ -38,6 +38,15 @@ object PlayerCache {
             .setCache(cache(ctx))
             .setUpstreamDataSourceFactory(http)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            // Los enlaces de YouTube cambian en cada visita: la caché se identifica por el fichero
+            // (formato + tamaño + duración), no por el enlace. Así sirve también para DASH.
+            .setCacheKeyFactory { spec ->
+                spec.key ?: spec.uri.let { u ->
+                    if (u.host?.contains("googlevideo") == true)
+                        "gv-${u.getQueryParameter("itag")}-${u.getQueryParameter("clen")}-${u.getQueryParameter("dur")}"
+                    else u.toString()
+                }
+            }
     }
 
     /**
@@ -54,6 +63,7 @@ object PlayerCache {
      * para que al tocar el vídeo empiece casi al instante. Bloqueante: llamar en segundo plano.
      */
     fun precache(ctx: Context, videoId: String, s: Streams, videoUrl: String) {
+        if (s.dash != null) return   // con DASH arranca en calidad baja: ya es casi instantáneo
         fun warm(url: String, kind: String, bytes: Long) = runCatching {
             val spec = androidx.media3.datasource.DataSpec.Builder().setUri(url)
                 .setKey(cacheKey(videoId, url, kind)).setPosition(0).setLength(bytes).build()
@@ -65,7 +75,8 @@ object PlayerCache {
 
     fun newPlayer(ctx: Context): ExoPlayer {
         // Búfer corto para empezar a reproducir antes
-        val lc = DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 50_000, 700, 1_500).build()
+        // Búfer mínimo para arrancar: 0,4 s (antes 0,7 s); tras un corte, 1 s
+        val lc = DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 50_000, 400, 1_000).build()
         val audio = androidx.media3.common.AudioAttributes.Builder()
             .setUsage(androidx.media3.common.C.USAGE_MEDIA)
             .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build()
@@ -79,6 +90,20 @@ object PlayerCache {
     /** Clave de caché estable por vídeo (las URLs de googlevideo caducan y cambian). */
     fun source(ctx: Context, video: Video, s: Streams, videoUrl: String = s.video): MediaSource {
         val videoId = video.id
+        val metaDash = androidx.media3.common.MediaMetadata.Builder()
+            .setTitle(video.title).setArtist(video.channel)
+            .setArtworkUri(android.net.Uri.parse(video.thumb)).build()
+        // DASH: todas las calidades; el reproductor arranca bajo y sube solo sin cortes
+        s.dash?.let { xml ->
+            runCatching {
+                val manifest = androidx.media3.exoplayer.dash.manifest.DashManifestParser()
+                    .parse(android.net.Uri.parse("https://www.youtube.com/"), xml.byteInputStream())
+                val item = MediaItem.Builder().setUri("https://www.youtube.com/watch?v=$videoId")
+                    .setMediaId(videoId).setMediaMetadata(metaDash).build()
+                return androidx.media3.exoplayer.dash.DashMediaSource.Factory(factory(ctx, s.ua))
+                    .createMediaSource(manifest, item)
+            }
+        }
         val f = ProgressiveMediaSource.Factory(factory(ctx, s.ua))
         // Título, canal y miniatura para la notificación y la pantalla de bloqueo
         val meta = androidx.media3.common.MediaMetadata.Builder()

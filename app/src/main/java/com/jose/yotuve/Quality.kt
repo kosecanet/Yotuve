@@ -24,6 +24,16 @@ object Quality {
         }
     }
 
+    /**
+     * Con DASH el reproductor elige la calidad solo (empieza baja y sube según la conexión);
+     * aquí solo se le pone el tope según lo que ocupa el vídeo en pantalla.
+     */
+    fun limit(maxHeight: Int) {
+        val p = PlayerHolder.current() ?: return
+        p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+            .setMaxVideoSize(Int.MAX_VALUE, maxHeight).build()
+    }
+
     /** Activa/desactiva la pista de vídeo (sin pantalla solo hace falta el audio). */
     fun videoEnabled(on: Boolean) {
         val p = PlayerHolder.current() ?: return
