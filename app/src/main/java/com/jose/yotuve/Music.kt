@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -200,7 +201,7 @@ object Music {
         val recentArtists = queue.take(index + 1).takeLast(4).map { artistKey(it.artist) }
         val seeds = (listOfNotNull(current?.id) + liked.shuffled().take(2).map { it.id }).distinct()
         val cands = kotlinx.coroutines.coroutineScope {
-            seeds.mapIndexed { si, id -> kotlinx.coroutines.async {
+            seeds.mapIndexed { si, id -> async {
                 runCatching { Innertube.related(id) }.getOrDefault(emptyList()).mapIndexed { i, v -> Triple(v, si, i) }
             } }.flatMap { it.await() }
         }.filter { (v, _, _) -> v.id !in used && (v.duration == null || v.duration in 90..480) && !BAD.containsMatchIn(v.title) }
