@@ -229,7 +229,7 @@ class MainVM : ViewModel() {
         if (!unmetered()) return
         for (v in list) {
             if (media && current != null) break   // si ya estás viendo un vídeo, no le quitamos velocidad
-            val st = runCatching { Repo.info(v).first }.getOrNull() ?: continue
+            val st = runCatching { Repo.fastStreams(v) }.getOrNull() ?: continue
             if (media && Positions.get(v.id) == 0L) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 PlayerCache.precache(App.instance, v.id, st, st.videoFor(Quality.target(App.instance, false, false)))
             }
@@ -364,29 +364,47 @@ class MainVM : ViewModel() {
         details = null; showComments = false; channelAvatar = null; related = emptyList()
         if (casting) castLoad(v, Positions.get(v.id))
         playJob?.cancel()
+        detailsJob?.cancel()
+        // 1º EL VÍDEO: solo los enlaces, nada más; arranca en cuanto los hay
         playJob = viewModelScope.launch {
-            // 1º lo urgente: enlaces + descripción en una sola llamada → el vídeo empieza cuanto antes
             try {
-                val (st, d) = Repo.info(v)
+                val st = Repo.fastStreams(v)
                 if (current?.id != v.id) return@launch
-                streams = st; details = d
+                streams = st
                 if (PlayerHolder.loadedId != v.id) loadPlayer(v, st, null)
-                if (st.audio == null) launch {   // modo rápido solo dio 360p: mejor calidad sin cortar
+                if (st.audio == null) launch {   // de momento 360p: mejor calidad en segundo plano, sin cortar
+                    waitPlaying()
                     Repo.upgrade(v)?.let { up -> if (current?.id == v.id) streams = up }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
-            } catch (e: Exception) { if (current?.id == v.id) error = "No se pudo reproducir: ${e.message}"; return@launch }
-            // 2º relacionados, 3º comentarios, 4º avatar del canal: de uno en uno para no frenar el vídeo
-            val rel = runCatching { Repo.related(v) }.getOrDefault(emptyList())
+            } catch (e: Exception) { if (current?.id == v.id) error = "No se pudo reproducir: ${e.message}" }
+        }
+        // 2º INFORMACIÓN (en paralelo, petición ligera) y 3º RECOMENDADOS (cuando el vídeo ya suena)
+        detailsJob = viewModelScope.launch {
+            val d = runCatching { Innertube.details(v) }.getOrNull()
+                ?: run { waitPlaying(); Repo.detailsFallback(v) }
             if (current?.id != v.id) return@launch
-            related = rel
-            // Comentarios y canal ya NO se piden automáticamente (cada uno es un proceso de yt-dlp
-            // que gasta batería): solo al abrir los comentarios o el canal.
-            details?.channelUrl?.let { url -> channelAvatar = channelCache[url]?.avatar }
-            if (channelAvatar == null) details?.channelId?.let { cid ->
-                val a = Repo.channelAvatar(cid)
-                if (current?.id == v.id) channelAvatar = a
+            details = d
+            d?.channelUrl?.let { url -> channelAvatar = channelCache[url]?.avatar }
+            if (channelAvatar == null) d?.channelId?.let { cid ->
+                launch { val a = Repo.channelAvatar(cid); if (current?.id == v.id) channelAvatar = a }
             }
+            waitPlaying()
+            val rel = d?.related?.takeIf { it.size >= 5 }?.let { Repo.relatedFrom(it, v) }
+                ?: runCatching { Repo.related(v) }.getOrDefault(emptyList())
+            if (current?.id == v.id) related = rel
+        }
+    }
+
+    private var detailsJob: Job? = null
+
+    /** Espera (máx. 6 s) a que el vídeo esté sonando, para no quitarle velocidad al arrancar. */
+    private suspend fun waitPlaying() {
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < 6000) {
+            val p = PlayerHolder.current()
+            if (p != null && (p.isPlaying || p.playbackState == androidx.media3.common.Player.STATE_READY)) return
+            kotlinx.coroutines.delay(150)
         }
     }
 
@@ -452,7 +470,7 @@ class MainVM : ViewModel() {
     /** Precarga al tocar un vídeo (antes de soltar el dedo): se gana medio segundo. */
     fun warm(v: Video) {
         if (current?.id == v.id) return
-        viewModelScope.launch { runCatching { Repo.info(v) } }
+        viewModelScope.launch { runCatching { Repo.fastStreams(v) } }
     }
 
     // ---------- Recuperación: enlace caducado (pasan ~6 h), caché dañada, corte de red…
@@ -471,7 +489,8 @@ class MainVM : ViewModel() {
         PlayerHolder.loadedId = null
         viewModelScope.launch {
             try {
-                val st = Repo.info(v).first
+                if (streams?.ua != null) Repo.noteDirectFailure()   // enlace directo falló: usar yt-dlp
+                val st = Repo.fastStreams(v)
                 if (current?.id != v.id) return@launch
                 error = null; streams = st
                 loadPlayer(v, st, pos)

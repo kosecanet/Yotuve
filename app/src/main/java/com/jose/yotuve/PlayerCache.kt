@@ -27,9 +27,12 @@ object PlayerCache {
         StandaloneDatabaseProvider(ctx),
     ).also { cache = it }
 
-    private fun factory(ctx: Context): CacheDataSource.Factory {
+    private const val CHROME_UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36"
+
+    /** [ua]: el mismo User-Agent con el que se pidieron los enlaces (YouTube lo comprueba). */
+    private fun factory(ctx: Context, ua: String? = null): CacheDataSource.Factory {
         val http = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36")
+            .setUserAgent(ua ?: CHROME_UA)
             .setAllowCrossProtocolRedirects(true)
         return CacheDataSource.Factory()
             .setCache(cache(ctx))
@@ -54,7 +57,7 @@ object PlayerCache {
         fun warm(url: String, kind: String, bytes: Long) = runCatching {
             val spec = androidx.media3.datasource.DataSpec.Builder().setUri(url)
                 .setKey(cacheKey(videoId, url, kind)).setPosition(0).setLength(bytes).build()
-            androidx.media3.datasource.cache.CacheWriter(factory(ctx).createDataSource(), spec, null, null).cache()
+            androidx.media3.datasource.cache.CacheWriter(factory(ctx, s.ua).createDataSource(), spec, null, null).cache()
         }
         warm(videoUrl, "v", 1_500_000)
         s.audio?.let { warm(it, "a", 400_000) }
@@ -76,7 +79,7 @@ object PlayerCache {
     /** Clave de caché estable por vídeo (las URLs de googlevideo caducan y cambian). */
     fun source(ctx: Context, video: Video, s: Streams, videoUrl: String = s.video): MediaSource {
         val videoId = video.id
-        val f = ProgressiveMediaSource.Factory(factory(ctx))
+        val f = ProgressiveMediaSource.Factory(factory(ctx, s.ua))
         // Título, canal y miniatura para la notificación y la pantalla de bloqueo
         val meta = androidx.media3.common.MediaMetadata.Builder()
             .setTitle(video.title).setArtist(video.channel)

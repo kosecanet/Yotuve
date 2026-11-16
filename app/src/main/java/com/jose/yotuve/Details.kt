@@ -14,6 +14,7 @@ data class Details(
     val description: String, val likes: Long?, val date: String?, val channel: String,
     val channelUrl: String?, val followers: Long?, val commentCount: Long?, val comments: List<Comment>,
     val channelId: String? = null, val timestamp: Long? = null, val views: Long? = null,
+    val related: List<Video> = emptyList(),
 )
 
 data class ChannelInfo(

@@ -54,7 +54,8 @@ data class VFormat(val height: Int, val url: String)
  * Streams separados de vídeo y audio (YouTube ya no da >360p progresivo).
  * [videos] son todas las calidades H.264 disponibles, para cambiar de calidad sin volver a llamar a yt-dlp.
  */
-data class Streams(val video: String, val audio: String?, val title: String, val videos: List<VFormat> = emptyList()) {
+data class Streams(val video: String, val audio: String?, val title: String, val videos: List<VFormat> = emptyList(),
+                   val ua: String? = null /* User-Agent con el que se pidieron (enlaces directos) */) {
     /** El formato más pequeño que cubra [target] píxeles de alto (o el mayor si ninguno llega). */
     fun videoFor(target: Int): String {
         if (videos.isEmpty() || audio == null) return video
@@ -350,6 +351,47 @@ object Repo {
      * Una sola ejecución de yt-dlp da los enlaces para reproducir y la descripción/canal.
      * Se guarda en memoria 3 h (los enlaces de YouTube caducan a las ~6 h): reabrir un vídeo es instantáneo.
      */
+    private val streamsCache = HashMap<String, Pair<Long, Streams>>()
+    @Volatile private var directOffUntil = 0L
+
+    /** Si un enlace directo falla al reproducirse, durante 1 h se usa yt-dlp. */
+    fun noteDirectFailure() { directOffUntil = System.currentTimeMillis() + 3600_000L }
+
+    /**
+     * SOLO los enlaces para reproducir, lo más rápido posible (lo primero que se necesita):
+     * 1) petición directa a YouTube por HTTP (cliente android_vr, sin Python): ~0,5 s
+     * 2) si falla, yt-dlp en modo rápido; 3) si falla, yt-dlp completo (y otros clientes).
+     */
+    suspend fun fastStreams(v: Video, maxHeight: Int = 1080): Streams = withContext(Dispatchers.IO) {
+        synchronized(streamsCache) { streamsCache[v.id] }?.let { (t, st) ->
+            if (System.currentTimeMillis() - t < 3 * 3600_000L) return@withContext st
+        }
+        synchronized(infoCache) { infoCache[v.id] }?.let { (t, r) ->
+            if (System.currentTimeMillis() - t < 3 * 3600_000L) return@withContext r.first
+        }
+        val direct = if (System.currentTimeMillis() > directOffUntil)
+            try { Innertube.streams(v, maxHeight) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { null }
+        else null
+        val st = direct ?: run {
+            waitReady()
+            (try { extract(v, maxHeight, fast = true) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null } ?: extract(v, maxHeight, fast = false)).first
+        }
+        synchronized(streamsCache) { streamsCache[v.id] = System.currentTimeMillis() to st }
+        st
+    }
+
+    /** Datos del vídeo con yt-dlp (solo si la petición directa de datos falla). */
+    suspend fun detailsFallback(v: Video): Details? = withContext(Dispatchers.IO) {
+        runCatching { waitReady(); extract(v, 1080, fast = true).second }.getOrNull()
+    }
+
+    /** Relacionados a partir de la lista que da YouTube, con variedad y priorizando lo nuevo. */
+    fun relatedFrom(list: List<Video>, v: Video): List<Video> =
+        diversify(rankFresh(list.filter { it.id != v.id }.distinctBy { it.id }), max = 3)
+
     /**
      * Enlaces para reproducir + datos del vídeo, lo más rápido posible:
      * - En paralelo, los datos (descripción, fecha, canal…) se piden directamente a YouTube por HTTP (sin Python).
@@ -379,6 +421,7 @@ object Repo {
         val st = runCatching { extract(v, maxHeight, fast = false).first }.getOrNull() ?: return@withContext null
         if (st.audio == null) return@withContext null
         synchronized(infoCache) { infoCache[v.id]?.let { (t, r) -> infoCache[v.id] = t to (st to r.second) } }
+        synchronized(streamsCache) { streamsCache[v.id] = System.currentTimeMillis() to st }
         st
     }
 
@@ -422,7 +465,10 @@ object Repo {
     }
 
     /** Olvida los enlaces guardados de un vídeo (caducados o que han dado error). */
-    fun invalidate(id: String) { synchronized(infoCache) { infoCache.remove(id) } }
+    fun invalidate(id: String) {
+        synchronized(infoCache) { infoCache.remove(id) }
+        synchronized(streamsCache) { streamsCache.remove(id) }
+    }
 
     suspend fun streams(v: Video, maxHeight: Int = 720): Streams = info(v, maxHeight).first
 

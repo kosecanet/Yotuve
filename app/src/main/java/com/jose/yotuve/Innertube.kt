@@ -100,6 +100,14 @@ object Innertube {
                 ?: Regex(""""likeCountIfIndifferentNumber":"(\d+)"""").find(raw)?.groupValues?.get(1)?.toLongOrNull()
         }
         val channelId = vd?.optString("channelId")?.ifBlank { null }
+        // Recomendados que da YouTube para este vídeo (vienen en la misma respuesta)
+        val rel = ArrayList<Video>()
+        if (next != null) walk(next) { k, o ->
+            when (k) {
+                "compactVideoRenderer" -> parseVideo(o)?.let { rel += it }
+                "lockupViewModel" -> parseLockup(o)?.let { rel += it }
+            }
+        }
         Details(
             description = vd?.optString("shortDescription") ?: "",
             likes = likes, date = date,
@@ -108,7 +116,74 @@ object Innertube {
             followers = subs, commentCount = comments, comments = emptyList(),
             channelId = channelId, timestamp = ts,
             views = vd?.optString("viewCount")?.toLongOrNull(),
+            related = rel.filter { it.id != v.id }.distinctBy { it.id },
         )
+    }
+
+    // ---------- Enlaces directos con el cliente android_vr (el mismo que usa yt-dlp, sin JavaScript)
+    private data class Vr(val version: String, val ua: String, val make: String, val model: String,
+                          val sdk: Int, val osVersion: String)
+
+    /**
+     * Datos del cliente android_vr. Se leen del propio yt-dlp instalado en la app (así, cuando yt-dlp se
+     * actualiza porque YouTube cambia algo, esto también); si no se puede, valores conocidos.
+     */
+    private val vr: Vr by lazy {
+        val def = Vr("1.65.10", "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; " +
+            "eureka-user Build/SQ3A.220605.009.A1) gzip", "Oculus", "Quest 3", 32, "12L")
+        runCatching {
+            val zip = java.util.zip.ZipFile(java.io.File(App.instance.noBackupFilesDir, "youtubedl-android/yt-dlp/yt-dlp"))
+            val src = zip.use { z ->
+                z.getEntry("yt_dlp/extractor/youtube/_base.py")?.let { e -> z.getInputStream(e).bufferedReader().readText() }
+            } ?: return@runCatching def
+            val i = src.indexOf("'android_vr': {").takeIf { it >= 0 } ?: return@runCatching def
+            val block = src.substring(i, minOf(src.length, i + 1500))
+            fun g(k: String) = Regex("""'$k':\s*'([^']+)'""").find(block)?.groupValues?.get(1)
+            Vr(g("clientVersion") ?: def.version, g("userAgent") ?: def.ua, g("deviceMake") ?: def.make,
+                g("deviceModel") ?: def.model,
+                Regex("""'androidSdkVersion':\s*(\d+)""").find(block)?.groupValues?.get(1)?.toIntOrNull() ?: def.sdk,
+                g("osVersion") ?: def.osVersion)
+        }.getOrDefault(def)
+    }
+
+    /**
+     * Enlaces para reproducir pedidos directamente a YouTube (una petición HTTP, sin Python).
+     * Devuelve null si YouTube no da enlaces directos para ese vídeo (entonces se usa yt-dlp).
+     */
+    suspend fun streams(v: Video, maxHeight: Int): Streams? = withContext(Dispatchers.IO) {
+        val c = vr
+        val body = JSONObject().put("context", JSONObject().put("client", JSONObject()
+            .put("clientName", "ANDROID_VR").put("clientVersion", c.version)
+            .put("deviceMake", c.make).put("deviceModel", c.model).put("androidSdkVersion", c.sdk)
+            .put("userAgent", c.ua).put("osName", "Android").put("osVersion", c.osVersion)
+            .put("hl", lang()).put("gl", country())))
+            .put("videoId", v.id).put("contentCheckOk", true).put("racyCheckOk", true)
+        val conn = (URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; doOutput = true
+            connectTimeout = 5000; readTimeout = 7000
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("User-Agent", c.ua)
+            setRequestProperty("X-YouTube-Client-Name", "28")
+            setRequestProperty("X-YouTube-Client-Version", c.version)
+            setRequestProperty("Origin", "https://www.youtube.com")
+        }
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+        if (conn.responseCode != 200) return@withContext null
+        val j = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        if (j.optJSONObject("playabilityStatus")?.optString("status") != "OK") return@withContext null
+        val sd = j.optJSONObject("streamingData") ?: return@withContext null
+        fun list(a: JSONArray?) = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) }.filter { it.has("url") }
+        val adaptive = list(sd.optJSONArray("adaptiveFormats"))
+        val videos = adaptive.filter { "avc1" in it.optString("mimeType") && it.optInt("height") in 144..maxHeight }
+            .groupBy { it.optInt("height") }
+            .map { (h, l) -> VFormat(h, l.maxBy { it.optLong("bitrate") }.getString("url")) }
+            .sortedBy { it.height }
+        val audio = adaptive.filter { it.optString("mimeType").startsWith("audio/mp4") }.maxByOrNull { it.optLong("bitrate") }
+        if (videos.isNotEmpty() && audio != null)
+            return@withContext Streams(videos.last().url, audio.getString("url"), v.title, videos, c.ua)
+        // Solo calidad básica (vídeo+audio juntos, 360p): sirve para empezar ya; luego se sube de calidad
+        val prog = list(sd.optJSONArray("formats")).maxByOrNull { it.optInt("height") } ?: return@withContext null
+        Streams(prog.getString("url"), null, v.title, emptyList(), c.ua)
     }
 
     /** Recorre todo el JSON llamando a [f] con cada objeto y su clave. */

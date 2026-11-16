@@ -117,7 +117,7 @@ fun ShortsScreen(vm: MainVM) {
         val v = list.getOrNull(idx) ?: return@LaunchedEffect
         playingId = null; paused = false
         player.stop()
-        val st = runCatching { Repo.info(v).first }.getOrNull() ?: return@LaunchedEffect
+        val st = runCatching { Repo.fastStreams(v) }.getOrNull() ?: return@LaunchedEffect
         if (pager.settledPage != idx) return@LaunchedEffect
         player.setMediaSource(PlayerCache.source(ctx, v, st)); player.prepare(); player.playWhenReady = true
         PlayerHolder.loadedId = v.id; PlayerHolder.loadedUrl = st.video
