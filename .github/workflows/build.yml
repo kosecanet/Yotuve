@@ -1,9 +1,16 @@
 name: Compilar APK y publicar Release
 
+# - push a main: SOLO compila (comprueba que todo está bien y deja el APK como artefacto). No publica.
+# - "Run workflow" a mano: compila Y publica la Release con las notas de CHANGELOG.md.
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      publicar:
+        description: "Publicar la Release"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -60,14 +67,25 @@ jobs:
           done
           ls out
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yotuve-1.${{ env.VC }}
+          path: out/*arm64*.apk
+
+      - name: Notas de la versión (CHANGELOG.md, sección "Pendiente de publicar")
+        if: github.event_name == 'workflow_dispatch' && inputs.publicar
+        run: |
+          awk '/^## Pendiente de publicar/{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > notes.md
+          echo "" >> notes.md
+          echo "Instala \`yotuve-arm64-v8a-…apk\` (casi todos los móviles) o \`yotuve-universal-…apk\` si ese no funciona." >> notes.md
+          cat notes.md
+
       - name: Publicar Release
+        if: github.event_name == 'workflow_dispatch' && inputs.publicar
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VC }}
           name: yotuve 1.${{ env.VC }}
-          body: |
-            APK para Android (sin anuncios). Instala `yotuve-arm64-v8a-…apk` (casi todos los móviles)
-            o `yotuve-universal-…apk` si ese no funciona.
-            Commit: ${{ github.sha }}
+          body_path: notes.md
           files: out/*.apk
           make_latest: true

@@ -53,6 +53,64 @@ object Innertube {
         out.distinctBy { it.id }
     }
 
+    private fun post(endpoint: String, body: JSONObject): JSONObject {
+        val c = (URL("https://www.youtube.com/youtubei/v1/$endpoint?prettyPrint=false").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; doOutput = true
+            connectTimeout = 6000; readTimeout = 8000
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36")
+            setRequestProperty("X-YouTube-Client-Name", "1")
+            setRequestProperty("X-YouTube-Client-Version", VERSION)
+            setRequestProperty("Accept-Language", "${lang()}-${country()},${lang()};q=0.9")
+            setRequestProperty("Cookie", "SOCS=CAI; CONSENT=YES+cb")
+        }
+        c.outputStream.use { it.write(body.toString().toByteArray()) }
+        if (c.responseCode != 200) error("YouTube respondió ${c.responseCode}")
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+    }
+
+    private fun ctx() = JSONObject().put("client", JSONObject()
+        .put("clientName", "WEB").put("clientVersion", VERSION).put("hl", lang()).put("gl", country()))
+
+    /**
+     * Datos del vídeo (descripción, visitas, fecha, canal, suscriptores, "me gusta", nº de comentarios)
+     * directamente de YouTube: 2 peticiones HTTP rápidas, sin Python. Va en paralelo con yt-dlp.
+     */
+    suspend fun details(v: Video): Details = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("context", ctx()).put("videoId", v.id)
+        val player = post("player", body)
+        val next = runCatching { post("next", JSONObject().put("context", ctx()).put("videoId", v.id)) }.getOrNull()
+        val vd = player.optJSONObject("videoDetails")
+        val mf = player.optJSONObject("microformat")?.optJSONObject("playerMicroformatRenderer")
+        val dateIso = mf?.optString("publishDate")?.ifBlank { null } ?: mf?.optString("uploadDate")?.ifBlank { null }
+        val ts = dateIso?.let { d ->
+            runCatching {
+                java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                    .parse(d.take(10))!!.time / 1000
+            }.getOrNull()
+        }
+        val date = dateIso?.take(10)?.split("-")?.takeIf { it.size == 3 }?.let { "${it[2]}/${it[1]}/${it[0]}" }
+        var subs: Long? = null; var comments: Long? = null
+        if (next != null) walk(next) { k, o ->
+            if (k == "subscriberCountText" && subs == null) subs = text(o)?.let(::parseCount)
+            if (k == "commentsEntryPointHeaderRenderer" && comments == null) comments = text(o.optJSONObject("commentCount"))?.let(::parseCount)
+        }
+        val likes = next?.toString()?.let { raw ->
+            Regex(""""likeCount":"(\d+)"""").find(raw)?.groupValues?.get(1)?.toLongOrNull()
+                ?: Regex(""""likeCountIfIndifferentNumber":"(\d+)"""").find(raw)?.groupValues?.get(1)?.toLongOrNull()
+        }
+        val channelId = vd?.optString("channelId")?.ifBlank { null }
+        Details(
+            description = vd?.optString("shortDescription") ?: "",
+            likes = likes, date = date,
+            channel = vd?.optString("author")?.ifBlank { null } ?: v.channel,
+            channelUrl = channelId?.let { "https://www.youtube.com/channel/$it" },
+            followers = subs, commentCount = comments, comments = emptyList(),
+            channelId = channelId, timestamp = ts,
+            views = vd?.optString("viewCount")?.toLongOrNull(),
+        )
+    }
+
     /** Recorre todo el JSON llamando a [f] con cada objeto y su clave. */
     private fun walk(o: Any?, f: (String, JSONObject) -> Unit) {
         when (o) {

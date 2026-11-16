@@ -10,6 +10,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -349,11 +350,52 @@ object Repo {
      * Una sola ejecución de yt-dlp da los enlaces para reproducir y la descripción/canal.
      * Se guarda en memoria 3 h (los enlaces de YouTube caducan a las ~6 h): reabrir un vídeo es instantáneo.
      */
+    /**
+     * Enlaces para reproducir + datos del vídeo, lo más rápido posible:
+     * - En paralelo, los datos (descripción, fecha, canal…) se piden directamente a YouTube por HTTP (sin Python).
+     * - Los enlaces se sacan con yt-dlp en modo RÁPIDO: un solo cliente (android_vr) y sin descargar la página
+     *   web ni manifiestos. Si falla, se hace la extracción completa normal (y, si hace falta, otros clientes).
+     * Se guarda en memoria 3 h (los enlaces de YouTube caducan a las ~6 h): reabrir un vídeo es instantáneo.
+     */
     suspend fun info(v: Video, maxHeight: Int = 1080): Pair<Streams, Details> = withContext(Dispatchers.IO) {
         synchronized(infoCache) { infoCache[v.id] }?.let { (t, r) ->
             if (System.currentTimeMillis() - t < 3 * 3600_000L) return@withContext r
         }
         waitReady()
+        val det = async { runCatching { Innertube.details(v) }.getOrNull() }
+        val ext = try { extract(v, maxHeight, fast = true) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { null } ?: extract(v, maxHeight, fast = false)
+        val r = ext.first to merge(det.await(), ext.second)
+        synchronized(infoCache) { infoCache[v.id] = System.currentTimeMillis() to r }
+        r
+    }
+
+    /**
+     * Extracción completa (todos los clientes de YouTube): se usa en segundo plano cuando el modo rápido
+     * solo dio la calidad básica (360p), para subir de calidad sin cortar.
+     */
+    suspend fun upgrade(v: Video, maxHeight: Int = 1080): Streams? = withContext(Dispatchers.IO) {
+        val st = runCatching { extract(v, maxHeight, fast = false).first }.getOrNull() ?: return@withContext null
+        if (st.audio == null) return@withContext null
+        synchronized(infoCache) { infoCache[v.id]?.let { (t, r) -> infoCache[v.id] = t to (st to r.second) } }
+        st
+    }
+
+    /** Une los datos de la web (más completos) con los de yt-dlp (respaldo). */
+    private fun merge(web: Details?, yt: Details): Details {
+        if (web == null) return yt
+        return web.copy(
+            description = web.description.ifBlank { yt.description },
+            likes = web.likes ?: yt.likes, date = web.date ?: yt.date,
+            channelUrl = web.channelUrl ?: yt.channelUrl, followers = web.followers ?: yt.followers,
+            commentCount = web.commentCount ?: yt.commentCount, channelId = web.channelId ?: yt.channelId,
+            timestamp = web.timestamp ?: yt.timestamp, views = web.views ?: yt.views,
+            channel = web.channel.ifBlank { yt.channel },
+        )
+    }
+
+    private suspend fun extract(v: Video, maxHeight: Int, fast: Boolean): Pair<Streams, Details> {
         val req = YoutubeDLRequest(v.url).apply {
             addOption("-J")
             // H.264 (avc1) primero: todos los móviles lo decodifican por hardware. AV1/VP9 en muchos
@@ -361,7 +403,9 @@ object Repo {
             addOption("-f", "bv*[height<=$maxHeight][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=$maxHeight][ext=mp4]+ba[ext=m4a]/b[height<=$maxHeight]/b")
             addOption("--no-playlist")
         }
-        val j = JSONObject(exec(req, yt = "skip=translated_subs", timeoutMs = 45_000).out)
+        val yt = if (fast) "player_client=android_vr;player_skip=webpage,configs;skip=translated_subs,hls,dash"
+            else "skip=translated_subs"
+        val j = JSONObject(exec(req, yt = yt, timeoutMs = if (fast) 25_000 else 45_000).out)
         val rf = j.optJSONArray("requested_formats")
         // Todas las calidades H.264 de solo vídeo (144p…1080p) para adaptar la calidad al tamaño
         val all = j.optJSONArray("formats")
@@ -374,9 +418,7 @@ object Repo {
         val st = if (rf != null && rf.length() > 0)
             Streams(rf.getJSONObject(0).getString("url"), rf.optJSONObject(1)?.optString("url"), v.title, videos)
         else Streams(j.getString("url"), null, v.title)
-        val r = st to detailsFrom(j, v, emptyList())
-        synchronized(infoCache) { infoCache[v.id] = System.currentTimeMillis() to r }
-        r
+        return st to detailsFrom(j, v, emptyList())
     }
 
     /** Olvida los enlaces guardados de un vídeo (caducados o que han dado error). */

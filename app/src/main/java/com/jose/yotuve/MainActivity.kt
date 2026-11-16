@@ -73,6 +73,24 @@ class MainVM : ViewModel() {
     private var playJob: Job? = null
 
     var fullscreen by mutableStateOf(false)
+    /** Vídeo minimizado (abajo a la derecha) mientras buscas o navegas. */
+    var minimized by mutableStateOf(false)
+    fun expand() { minimized = false; searching = false; channelOpen = false }
+    private var searchFromVideo = false
+
+    /** Abrir el buscador: si estabas viendo un vídeo, sigue sonando en la miniventana. */
+    fun openSearch() {
+        searchFromVideo = current != null && !minimized
+        if (current != null) { minimized = true; fullscreen = false }
+        searching = true
+    }
+
+    /** Cerrar el buscador sin buscar: si venías de un vídeo, vuelve a él. */
+    fun cancelSearch() {
+        searching = false
+        if (searchFromVideo) minimized = false
+        searchFromVideo = false
+    }
     /** Bloqueo para niños en pantalla completa: ignora toques y el botón atrás. */
     var kidLock by mutableStateOf(false)
 
@@ -90,7 +108,8 @@ class MainVM : ViewModel() {
 
     // ---------- Historial de navegación: inicio → búsqueda → vídeo → relacionado → canal → vídeo… siempre se puede volver
     private data class Snap(val video: Video?, val query: String, val lastQuery: String?, val results: List<Video>,
-                            val channelOpen: Boolean, val channel: ChannelInfo?, val shortsOpen: Boolean)
+                            val channelOpen: Boolean, val channel: ChannelInfo?, val shortsOpen: Boolean,
+                            val minimized: Boolean)
     private val backStack = ArrayDeque<Snap>()
     private var restoring = false
     var backDepth by mutableStateOf(0)
@@ -98,7 +117,7 @@ class MainVM : ViewModel() {
     /** Guarda dónde estás antes de ir a otro sitio. */
     private fun push() {
         if (restoring) return
-        backStack.addLast(Snap(current, query, lastQuery, results, channelOpen, channel, shortsOpen))
+        backStack.addLast(Snap(current, query, lastQuery, results, channelOpen, channel, shortsOpen, minimized))
         while (backStack.size > 60) backStack.removeFirst()
         backDepth = backStack.size
     }
@@ -111,7 +130,7 @@ class MainVM : ViewModel() {
         try {
             if (shortsOpen && !s.shortsOpen) closeShorts()
             query = s.query; lastQuery = s.lastQuery; results = s.results; error = null
-            channel = s.channel; channelOpen = s.channelOpen
+            channel = s.channel; channelOpen = s.channelOpen; minimized = s.minimized
             val sv = s.video
             if (sv == null) { if (current != null) closeVideo() }
             else if (sv.id != current?.id) play(sv)   // sigue donde lo dejaste
@@ -122,6 +141,7 @@ class MainVM : ViewModel() {
     fun openChannel(url: String?) {
         if (url == null) return
         push()
+        if (current != null) { minimized = true; fullscreen = false }
         channelOpen = true; channelError = null; channelHasMore = true
         channelCache[url]?.let { channel = it; return }
         channel = null
@@ -231,7 +251,7 @@ class MainVM : ViewModel() {
     fun home() {
         backStack.clear(); backDepth = 0; lastQuery = null
         if (shortsOpen) closeShorts()
-        if (current != null) closeVideo()
+        if (current != null) { minimized = true; fullscreen = false }
         channelOpen = false; searching = false; suggestions = emptyList(); query = ""
         // Se quitan los resultados de búsqueda al momento y se enseña el último inicio guardado
         results = FeedCache.load()
@@ -278,8 +298,8 @@ class MainVM : ViewModel() {
         push()
         if (fromUser) query = q
         lastQuery = q; canLoadMore = true; channelOpen = false
-        if (current != null) closeVideo()
-        searching = false; suggestions = emptyList()
+        if (current != null) { minimized = true; fullscreen = false }   // sigue sonando en la miniventana
+        searching = false; suggestions = emptyList(); searchFromVideo = false
         viewModelScope.launch {
             loading = true; error = null
             try { results = Repo.search(q) } catch (e: Throwable) { error = e.message }
@@ -317,6 +337,7 @@ class MainVM : ViewModel() {
 
     /** Cierra el vídeo y para el sonido (como al salir del reproductor en YouTube). */
     fun closeVideo() {
+        minimized = false
         kidLock = false; cancelCountdown(); ended = false
         saveProgress()
         current = null; fullscreen = false; showComments = false
@@ -333,7 +354,11 @@ class MainVM : ViewModel() {
         History.add(v)
         cancelCountdown(); ended = false; nextVideo = null
         saveProgress()
-        if (PlayerHolder.loadedId != v.id) { PlayerHolder.current()?.stop(); PlayerHolder.loadedId = null }
+        minimized = false
+        // Si sonaba otro vídeo, baja su volumen poco a poco mientras carga el nuevo (fundido)
+        if (PlayerHolder.loadedId != v.id) PlayerHolder.current()?.let { p ->
+            if (p.isPlaying) { crossfade = true; fadeVolume(p, 0.15f, 600) } else p.stop()
+        }
         current = v; streams = null; error = null; details = null
         dlProgress = if (dlId == v.id) dlProgress else null
         details = null; showComments = false; channelAvatar = null; related = emptyList()
@@ -346,6 +371,9 @@ class MainVM : ViewModel() {
                 if (current?.id != v.id) return@launch
                 streams = st; details = d
                 if (PlayerHolder.loadedId != v.id) loadPlayer(v, st, null)
+                if (st.audio == null) launch {   // modo rápido solo dio 360p: mejor calidad sin cortar
+                    Repo.upgrade(v)?.let { up -> if (current?.id == v.id) streams = up }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) { if (current?.id == v.id) error = "No se pudo reproducir: ${e.message}"; return@launch }
             // 2º relacionados, 3º comentarios, 4º avatar del canal: de uno en uno para no frenar el vídeo
@@ -389,11 +417,42 @@ class MainVM : ViewModel() {
         attachListener(p)
         val url = st.videoFor(Quality.target(ctx, fullscreen, pip))
         val pos = start ?: Positions.get(v.id)
-        p.setMediaSource(PlayerCache.source(ctx, v, st, url), pos); p.prepare()
-        p.playWhenReady = !casting   // si está en la TV, en el móvil queda en pausa
+        val fadeIn = crossfade; crossfade = false
+        if (fadeIn) {
+            // Fundido: termina de bajar el anterior y el nuevo entra subiendo el volumen
+            viewModelScope.launch {
+                fadeVolume(p, 0f, 250); kotlinx.coroutines.delay(260)
+                p.setMediaSource(PlayerCache.source(ctx, v, st, url), pos); p.prepare()
+                p.playWhenReady = !casting
+                fadeVolume(p, 1f, 900)
+            }
+        } else {
+            p.volume = 1f
+            p.setMediaSource(PlayerCache.source(ctx, v, st, url), pos); p.prepare()
+            p.playWhenReady = !casting   // si está en la TV, en el móvil queda en pausa
+        }
         PlayerHolder.loadedId = v.id; PlayerHolder.loadedUrl = url
         if (start == null && pos > 0)
             Toast.makeText(ctx, "Continuando desde ${fmtDur(pos / 1000)}", Toast.LENGTH_SHORT).show()
+    }
+
+    private var crossfade = false
+    private var fadeJob: Job? = null
+
+    /** Lleva el volumen del reproductor a [to] en [ms] milisegundos. */
+    private fun fadeVolume(p: androidx.media3.exoplayer.ExoPlayer, to: Float, ms: Long) {
+        fadeJob?.cancel()
+        fadeJob = viewModelScope.launch {
+            val from = p.volume; val steps = (ms / 30).coerceAtLeast(1)
+            for (i in 1..steps) { p.volume = from + (to - from) * i / steps; kotlinx.coroutines.delay(30) }
+            p.volume = to
+        }
+    }
+
+    /** Precarga al tocar un vídeo (antes de soltar el dedo): se gana medio segundo. */
+    fun warm(v: Video) {
+        if (current?.id == v.id) return
+        viewModelScope.launch { runCatching { Repo.info(v) } }
     }
 
     // ---------- Recuperación: enlace caducado (pasan ~6 h), caché dañada, corte de red…
@@ -611,25 +670,27 @@ fun AppScreen(vm: MainVM) {
         when {
             vm.kidLock -> {}                          // bloqueado: atrás no hace nada
             vm.fullscreen -> vm.fullscreen = false
-            vm.searching -> vm.searching = false
+            vm.searching -> vm.cancelSearch()
             vm.back() -> {}                           // vuelve al sitio anterior del historial
             vm.shortsOpen -> vm.closeShorts()
             vm.channelOpen -> vm.closeChannel()
+            vm.current != null && vm.minimized -> vm.expand()
             vm.current != null -> vm.closeVideo()
         }
     }
+    Box(Modifier.fillMaxSize()) {
     Column(if (vm.fullscreen || vm.pip) Modifier.fillMaxSize() else Modifier.fillMaxSize().statusBarsPadding()) {
         when {
             vm.pip && vm.current != null -> PlayerScreen(vm, vm.current!!)
             vm.shortsOpen -> ShortsScreen(vm)
             vm.searching -> SearchScreen(vm)
             vm.channelOpen -> ChannelScreen(vm)
-            vm.current != null -> {
-                if (!vm.fullscreen) TopBar(onSearch = { vm.searching = true }, onHome = { vm.home() })
+            vm.current != null && !vm.minimized -> {
+                if (!vm.fullscreen) TopBar(onSearch = { vm.openSearch() }, onHome = { vm.home() })
                 PlayerScreen(vm, vm.current!!)
             }
             else -> {
-                TopBar(onSearch = { vm.searching = true }, onHome = { vm.home() })
+                TopBar(onSearch = { vm.openSearch() }, onHome = { vm.home() })
                 Feed(vm, vm.results, footer = {
                     if (vm.lastQuery == null) {
                         // Al final del inicio: Seguir viendo y Shorts
@@ -643,6 +704,32 @@ fun AppScreen(vm: MainVM) {
                         }
                     }
                 })
+            }
+        }
+    }
+    // Vídeo minimizado: abajo a la derecha, por encima del teclado
+    if (vm.current != null && vm.minimized && !vm.shortsOpen && !vm.pip) MiniPlayer(vm)
+    }
+}
+
+/** Miniventana con el vídeo: tocar = volver al vídeo; X = cerrarlo. */
+@OptIn(UnstableApi::class)
+@Composable
+fun MiniPlayer(vm: MainVM) {
+    val ctx = LocalContext.current
+    val player = remember { PlayerHolder.get(ctx) }
+    Box(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
+        Box(Modifier.align(Alignment.BottomEnd).padding(12.dp).width(176.dp).aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(10.dp)).background(Color.Black).clickable { vm.expand() }) {
+            AndroidView(
+                factory = { PlayerView(it).apply { this.player = player; useController = false } },
+                onRelease = { it.player = null },
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (vm.streams == null) AsyncImage(vm.current?.thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Box(Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp).clip(CircleShape).background(Color(0x99000000))
+                .clickable { vm.closeVideo() }, contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Close, "Cerrar", tint = Color.White, modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -705,7 +792,7 @@ fun SearchScreen(vm: MainVM) {
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { fr.requestFocus() }
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { vm.searching = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás") }
+        IconButton(onClick = { vm.cancelSearch() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Atrás") }
         TextField(
             value = vm.query, onValueChange = vm::onQueryChange,
             placeholder = { Text("Buscar en YouTube") },
@@ -743,14 +830,16 @@ fun Feed(vm: MainVM, list: List<Video>, header: (@Composable () -> Unit)? = null
             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = YtRed) }
         }
         vm.error?.let { if (vm.current == null) item { Text(it, color = YtRed, modifier = Modifier.padding(16.dp)) } }
-        items(list, key = { it.id + list.indexOf(it) }) { v -> VideoCard(v) { vm.play(v) } }
+        items(list, key = { it.id + list.indexOf(it) }) { v -> VideoCard(v, onPress = { vm.warm(v) }) { vm.play(v) } }
         footer?.let { item { it() } }
     }
 }
 
 @Composable
-fun VideoCard(v: Video, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(bottom = 16.dp)) {
+fun VideoCard(v: Video, onPress: (() -> Unit)? = null, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth()
+        .pointerInput(v.id) { detectTapGestures(onPress = { onPress?.invoke() }, onTap = { onClick() }) }
+        .padding(bottom = 16.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             AsyncImage(v.thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().background(Color(0xFF222222)))
             Positions.progress(v.id)?.let { prog ->
