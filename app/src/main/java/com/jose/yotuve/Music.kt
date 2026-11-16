@@ -26,7 +26,11 @@ import java.net.URL
 data class Track(
     val id: String?, val title: String, val artist: String, val duration: Long?,
     val thumb: String? = id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" },
+    val auto: Boolean = false,   // añadida sola al terminar la lista (relacionada con lo que te gusta)
 )
+
+/** Valoración guardada de una canción: 1 me gusta, -1 no me gusta. */
+data class Rating(val id: String, val r: Int, val title: String, val artist: String)
 
 /**
  * Modo música: solo sonido, con una lista (cola) que se puede importar de Spotify o YouTube, ampliar y reordenar.
@@ -59,18 +63,44 @@ object Music {
             queue = List(a.length()) { i ->
                 val o = a.getJSONObject(i)
                 Track(o.optString("id").ifBlank { null }, o.optString("t"), o.optString("a"),
-                    o.optLong("d").takeIf { it > 0 })
+                    o.optLong("d").takeIf { it > 0 }, auto = o.optBoolean("auto"))
             }
             index = prefs().getInt("i", if (queue.isEmpty()) -1 else 0).coerceIn(-1, queue.size - 1)
             shuffle = prefs().getBoolean("shuffle", false); repeat = prefs().getInt("repeat", 0)
+            val r = JSONArray(prefs().getString("valoraciones", "[]"))
+            ratings = (0 until r.length()).map { r.getJSONObject(it) }
+                .associate { it.getString("id") to Rating(it.getString("id"), it.getInt("r"), it.optString("t"), it.optString("a")) }
         }
     }
 
     private fun save() {
         val a = JSONArray()
-        queue.forEach { a.put(JSONObject().put("id", it.id ?: "").put("t", it.title).put("a", it.artist).put("d", it.duration ?: 0)) }
+        queue.forEach { a.put(JSONObject().put("id", it.id ?: "").put("t", it.title).put("a", it.artist)
+            .put("d", it.duration ?: 0).put("auto", it.auto)) }
+        val r = JSONArray()
+        ratings.values.forEach { r.put(JSONObject().put("id", it.id).put("r", it.r).put("t", it.title).put("a", it.artist)) }
+        prefs().edit().putString("valoraciones", r.toString()).apply()
         prefs().edit().putString("cola", a.toString()).putInt("i", index)
             .putBoolean("shuffle", shuffle).putInt("repeat", repeat).apply()
+    }
+
+    // ---------- Me gusta / No me gusta (registro guardado en el móvil)
+    var ratings by mutableStateOf<Map<String, Rating>>(emptyMap())
+
+    fun ratingOf(t: Track?) = t?.id?.let { ratings[it]?.r } ?: 0
+
+    /** Me gusta (o lo quita si ya estaba). */
+    fun like() = rate(1)
+
+    /** No me gusta: se salta ya y no volverá a sonar ni a añadirse sola. */
+    fun dislike() { rate(-1); if (ratingOf(current) == -1 && active) next() }
+
+    private fun rate(r: Int) {
+        val t = current ?: return
+        val id = t.id ?: return
+        val m = ratings.toMutableMap()
+        if (m[id]?.r == r) m.remove(id) else m[id] = Rating(id, r, t.title, t.artist)
+        ratings = m; save()
     }
 
     // ---------- Editar la lista
@@ -125,8 +155,45 @@ object Music {
 
     private fun nextIndex(from: Int = index): Int? {
         if (queue.isEmpty()) return null
-        if (shuffle && queue.size > 1) return (queue.indices - from).random()
-        return if (from + 1 < queue.size) from + 1 else if (repeat == 1) 0 else null
+        val ok = queue.indices.filter { ratingOf(queue[it]) != -1 }
+        if (shuffle && ok.size > 1) return (ok - from).randomOrNull()
+        ok.firstOrNull { it > from }?.let { return it }
+        return if (repeat == 1) ok.firstOrNull() else null
+    }
+
+    // ---------- Al acabarse la lista: canciones relacionadas, una tras otra, sin repetir
+    private var autoBusy = false
+
+    /**
+     * Si la canción actual es la última, añade ya una relacionada (así la siguiente está precargada).
+     * Se elige a partir de la canción actual y de algunas que te gustan; nunca repite ni añade las que no te gustan,
+     * y da prioridad a artistas que te gustan.
+     */
+    private fun ensureNext() {
+        if (repeat != 0 || shuffle || nextIndex() != null || autoBusy) return
+        autoBusy = true
+        scope.launch {
+            try { pickRelated()?.let { add(it); preloadNext() } } finally { autoBusy = false }
+        }
+    }
+
+    private suspend fun pickRelated(): Track? {
+        val liked = ratings.values.filter { it.r == 1 }
+        val disliked = ratings.values.filter { it.r == -1 }
+        val likedArtists = liked.map { it.artist.lowercase() }.toSet()
+        val badArtists = disliked.map { it.artist.lowercase() }.toSet()
+        val used = queue.mapNotNull { it.id }.toSet() + disliked.map { it.id }
+        val seeds = (listOfNotNull(current?.id) + liked.shuffled().take(2).map { it.id }).distinct()
+        val cands = seeds.flatMapIndexed { si, id ->
+            runCatching { Innertube.related(id) }.getOrDefault(emptyList()).mapIndexed { i, v -> Triple(v, si, i) }
+        }.filter { (v, _, _) -> v.id !in used && (v.duration == null || v.duration in 60..600) }
+        if (cands.isEmpty()) return null
+        val best = cands.maxBy { (v, si, i) ->
+            val a = v.channel.lowercase()
+            (if (a in likedArtists) 4.0 else 0.0) - (if (a in badArtists) 6.0 else 0.0) -
+                i * 0.25 - si * 0.5 + Math.random() * 0.8
+        }.first
+        return Track(best.id, best.title, best.channel, best.duration, auto = true)
     }
 
     /** Empieza a sonar la canción [i] (con fundido de entrada). */
@@ -151,7 +218,7 @@ object Music {
             p.setMediaSource(src); p.prepare(); p.play()
             fadingOut = false
             fade(p, 1f, 1200)
-            startWatcher(); preloadNext()
+            startWatcher(); ensureNext(); preloadNext()
         }
     }
 
@@ -168,7 +235,15 @@ object Music {
         if (p.isPlaying) scope.launch { fade(p, 0f, 300); p.pause() } else { p.play(); scope.launch { fade(p, 1f, 400) } }
     }
 
-    fun next() { nextIndex()?.let { playAt(it) } ?: run { stop() } }
+    fun next() {
+        nextIndex()?.let { playAt(it); return }
+        // Fin de la lista: buscar una relacionada y seguir
+        if (repeat == 0 && !shuffle) scope.launch {
+            loading = true
+            val t = pickRelated(); loading = false
+            if (t != null) { add(t); playAt(queue.lastIndex) } else stop()
+        } else stop()
+    }
 
     fun prev() {
         val p = player()

@@ -122,7 +122,22 @@ private fun NowPlaying() {
         Spacer(Modifier.height(16.dp))
         Text(t?.title ?: "Nada sonando", fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 2,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
-        Text(t?.artist ?: "", color = MSub, fontSize = 14.sp, maxLines = 1, modifier = Modifier.fillMaxWidth())
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(t?.artist ?: "", color = MSub, fontSize = 14.sp, maxLines = 1)
+                if (t?.auto == true) Text("Añadida sola · relacionada con lo que te gusta", color = MSub, fontSize = 11.sp)
+            }
+            // Me gusta / No me gusta
+            val r = Music.ratingOf(t)
+            IconButton(onClick = { Music.dislike() }, enabled = t?.id != null) {
+                Icon(if (r == -1) Icons.Default.ThumbDown else Icons.Default.ThumbDownOffAlt, "No me gusta",
+                    tint = if (r == -1) MRed else Color.White)
+            }
+            IconButton(onClick = { Music.like() }, enabled = t?.id != null) {
+                Icon(if (r == 1) Icons.Default.ThumbUp else Icons.Default.ThumbUpOffAlt, "Me gusta",
+                    tint = if (r == 1) MRed else Color.White)
+            }
+        }
         Spacer(Modifier.height(8.dp))
         val frac = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f
         Slider(value = dragging ?: frac, onValueChange = { dragging = it },
@@ -169,14 +184,20 @@ private fun TrackRow(i: Int, t: Track, edit: Boolean) {
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(t.title, color = if (isCurrent) MRed else Color.White, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(t.artist.ifBlank { null }, t.duration?.let { fmtDur(it) }).joinToString(" · "),
+            Text(listOfNotNull(t.artist.ifBlank { null }, t.duration?.let { fmtDur(it) },
+                if (t.auto) "auto" else null).joinToString(" · "),
                 color = MSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (edit) {
             IconButton(onClick = { Music.move(i, i - 1) }, enabled = i > 0) { Icon(Icons.Default.KeyboardArrowUp, "Subir") }
             IconButton(onClick = { Music.move(i, i + 1) }, enabled = i < Music.queue.size - 1) { Icon(Icons.Default.KeyboardArrowDown, "Bajar") }
             IconButton(onClick = { Music.remove(i) }) { Icon(Icons.Default.Close, "Quitar", tint = MSub) }
-        } else t.duration?.let { Text(fmtDur(it), color = MSub, fontSize = 12.sp) }
+        } else {
+            when (Music.ratingOf(t)) {
+                1 -> Icon(Icons.Default.ThumbUp, "Me gusta", tint = MRed, modifier = Modifier.size(16.dp))
+                -1 -> Icon(Icons.Default.ThumbDown, "No me gusta", tint = MSub, modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 

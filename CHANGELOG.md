@@ -2,6 +2,13 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Me gusta / No me gusta y radio infinita en el modo música
+
+- Botones **Me gusta** y **No me gusta** en la canción que suena; se guarda un registro en el móvil.
+- «No me gusta» salta la canción en el momento y no vuelve a sonar ni a añadirse sola.
+- Al acabarse la lista se va añadiendo una canción **relacionada**, una tras otra y sin repetir, elegida a partir
+  de la que suena y de las que te gustan, con prioridad para tus artistas favoritos (marcadas como «auto»).
+
 ## 16/11/2026 · Modo música, menú con versión e inicio según tus 50 últimos vídeos
 
 - **Modo música** (icono de nota arriba o menú): solo sonido, con lista que se puede importar de Spotify
