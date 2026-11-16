@@ -19,6 +19,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Número de versión: compilación + 200 (por encima de las versiones del flujo anterior)
+      - name: Número de versión
+        run: echo "VC=$(( ${{ github.run_number }} + 200 ))" >> "$GITHUB_ENV"
+
       # ubuntu-latest ya trae el SDK y el NDK de Android
 
       # Intérprete JavaScript para yt-dlp (vídeos "para niños" o con restricciones).
@@ -42,7 +46,7 @@ jobs:
         run: |
           chmod +x gradlew
           set +e
-          ./gradlew assembleRelease --no-daemon -PversionCode=${{ github.run_number }} 2>&1 | tee build.log
+          ./gradlew assembleRelease --no-daemon -PversionCode=$VC 2>&1 | tee build.log
           R=${PIPESTATUS[0]}
           grep -E "^e: |What went wrong|Could not" -A2 build.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
           exit $R
@@ -52,15 +56,15 @@ jobs:
           mkdir -p out
           for f in app/build/outputs/apk/release/*.apk; do
             n=$(basename "$f" .apk); n=${n#app-}; n=${n%-release}
-            cp "$f" "out/yotuve-$n-1.${{ github.run_number }}.apk"
+            cp "$f" "out/yotuve-$n-1.$VC.apk"
           done
           ls out
 
       - name: Publicar Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.run_number }}
-          name: yotuve 1.${{ github.run_number }}
+          tag_name: v${{ env.VC }}
+          name: yotuve 1.${{ env.VC }}
           body: |
             APK para Android (sin anuncios). Instala `yotuve-arm64-v8a-…apk` (casi todos los móviles)
             o `yotuve-universal-…apk` si ese no funciona.
