@@ -1,8 +1,9 @@
 # Cambios de yotuve
 
-## Pendiente de publicar
+La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
-- La compilación ya no publica sola: las versiones se publican a mano cuando se decide.
+## 16/11/2026 · Minirreproductor y carga rápida
+
 - Vídeo minimizado abajo a la derecha (por encima del teclado) al buscar, ir al inicio o abrir un canal;
   tocarlo lo vuelve a abrir y la X lo cierra.
 - Fundido de sonido al cambiar de vídeo: el anterior baja poco a poco y el nuevo entra subiendo.
