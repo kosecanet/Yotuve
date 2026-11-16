@@ -73,6 +73,9 @@ class MainVM : ViewModel() {
     private var playJob: Job? = null
 
     var fullscreen by mutableStateOf(false)
+    /** Pantalla del modo música abierta. */
+    var musicOpen by mutableStateOf(false)
+    fun openMusic() { if (current != null) { minimized = true; fullscreen = false }; musicOpen = true }
     /** Vídeo minimizado (abajo a la derecha) mientras buscas o navegas. */
     var minimized by mutableStateOf(false)
     fun expand() { minimized = false; searching = false; channelOpen = false }
@@ -203,7 +206,7 @@ class MainVM : ViewModel() {
 
     /** Guarda por dónde va el vídeo actual (o lo borra si ha terminado). */
     fun saveProgress() {
-        if (shortsOpen) return   // los Shorts no se guardan en "Seguir viendo"
+        if (shortsOpen || Music.active) return   // ni los Shorts ni la música van a "Seguir viendo"
         val p = PlayerHolder.current() ?: return
         val id = PlayerHolder.loadedId ?: return
         if (casting) { CastHelper.player?.let { Positions.save(id, it.currentPosition, it.duration) }; return }
@@ -237,6 +240,7 @@ class MainVM : ViewModel() {
     }
 
     fun openShorts(index: Int) {
+        Music.stop()
         push()
         saveProgress(); closeVideo()
         shortsStart = index; shortsOpen = true
@@ -348,6 +352,7 @@ class MainVM : ViewModel() {
 
     fun play(v: Video) {
         if (current?.id == v.id && playJob?.isActive == true) return   // ya se está cargando
+        Music.stop(); musicOpen = false   // un vídeo para la música
         if (current?.id != v.id) push()
         channelOpen = false
         commentsMax = 20; commentsError = null
@@ -418,12 +423,12 @@ class MainVM : ViewModel() {
         listenerAttached = true
         p.addListener(object : androidx.media3.common.Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (shortsOpen) return
+                if (shortsOpen || Music.active) return
                 if (state == androidx.media3.common.Player.STATE_ENDED) onEnded()
                 else if (ended && state != androidx.media3.common.Player.STATE_IDLE) { ended = false; cancelCountdown() }
             }
             override fun onPlayerError(e: androidx.media3.common.PlaybackException) {
-                if (!shortsOpen) recoverPlayback(p.currentPosition)
+                if (!shortsOpen && !Music.active) recoverPlayback(p.currentPosition)
             }
         })
     }
@@ -562,6 +567,7 @@ class MainVM : ViewModel() {
     }
 
     // Al final de la clase: así todas las propiedades ya están creadas antes de usarlas
+    init { Music.load(); Music.onStart = { if (current != null) closeVideo() } }
     init {
         home()
         viewModelScope.launch {
@@ -686,9 +692,10 @@ fun CrashScreen(text: String, onClose: () -> Unit) {
 @Composable
 fun AppScreen(vm: MainVM) {
     BackHandler(vm.current != null || vm.searching || vm.channelOpen || vm.shortsOpen || vm.kidLock ||
-        vm.fullscreen || vm.backDepth > 0) {
+        vm.fullscreen || vm.backDepth > 0 || vm.musicOpen) {
         when {
             vm.kidLock -> {}                          // bloqueado: atrás no hace nada
+            vm.musicOpen -> vm.musicOpen = false
             vm.fullscreen -> vm.fullscreen = false
             vm.searching -> vm.cancelSearch()
             vm.back() -> {}                           // vuelve al sitio anterior del historial
@@ -703,14 +710,15 @@ fun AppScreen(vm: MainVM) {
         when {
             vm.pip && vm.current != null -> PlayerScreen(vm, vm.current!!)
             vm.shortsOpen -> ShortsScreen(vm)
+            vm.musicOpen -> MusicScreen(onBack = { vm.musicOpen = false })
             vm.searching -> SearchScreen(vm)
             vm.channelOpen -> ChannelScreen(vm)
             vm.current != null && !vm.minimized -> {
-                if (!vm.fullscreen) TopBar(onSearch = { vm.openSearch() }, onHome = { vm.home() })
+                if (!vm.fullscreen) TopBar(onSearch = { vm.openSearch() }, onHome = { vm.home() }, onMusic = { vm.openMusic() })
                 PlayerScreen(vm, vm.current!!)
             }
             else -> {
-                TopBar(onSearch = { vm.openSearch() }, onHome = { vm.home() })
+                TopBar(onSearch = { vm.openSearch() }, onHome = { vm.home() }, onMusic = { vm.openMusic() })
                 Feed(vm, vm.results, footer = {
                     if (vm.lastQuery == null) {
                         // Al final del inicio: Seguir viendo y Shorts
@@ -728,7 +736,9 @@ fun AppScreen(vm: MainVM) {
         }
     }
     // Vídeo minimizado: abajo a la derecha, por encima del teclado
-    if (vm.current != null && vm.minimized && !vm.shortsOpen && !vm.pip) MiniPlayer(vm)
+    if (vm.current != null && vm.minimized && !vm.shortsOpen && !vm.pip && !vm.musicOpen) MiniPlayer(vm)
+    // Música sonando y estás en otra pantalla: barra abajo
+    if (Music.active && !vm.musicOpen && vm.current == null && !vm.shortsOpen && !vm.searching) MusicMiniBar { vm.openMusic() }
     }
 }
 
@@ -756,9 +766,13 @@ fun MiniPlayer(vm: MainVM) {
 }
 
 @Composable
-fun TopBar(onSearch: () -> Unit, onHome: () -> Unit) {
+fun TopBar(onSearch: () -> Unit, onHome: () -> Unit, onMusic: () -> Unit = {}) {
+    val ctx = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.clickable(onClick = onHome), verticalAlignment = Alignment.CenterVertically) {
+        // Tocar el logo: inicio. Mantenerlo pulsado: menú (versión y modo música)
+        Row(Modifier.pointerInput(Unit) { detectTapGestures(onTap = { onHome() }, onLongPress = { menu = true }) },
+            verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(26.dp).clip(CircleShape).background(Color(0xFFF2383A)),
             contentAlignment = Alignment.Center) {
             Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(18.dp))
@@ -767,7 +781,32 @@ fun TopBar(onSearch: () -> Unit, onHome: () -> Unit) {
         Text("yotuve", fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = (-1).sp)
         }
         Spacer(Modifier.weight(1f))
+        IconButton(onClick = onMusic) { Icon(Icons.Default.MusicNote, "Modo música") }
         IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Buscar") }
+        Box {
+            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Menú") }
+            val (vName, vCode) = remember {
+                runCatching {
+                    val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+                    (pi.versionName ?: "") to androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(pi)
+                }.getOrDefault("" to 0L)
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("Modo música") }, leadingIcon = { Icon(Icons.Default.MusicNote, null) },
+                    onClick = { menu = false; onMusic() })
+                DropdownMenuItem(text = { Text("Versión $vName · novedades") }, leadingIcon = { Icon(Icons.Default.Info, null) },
+                    onClick = {
+                        menu = false
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/kosecanet/Yotuve/releases/tag/v$vCode")))
+                    })
+                DropdownMenuItem(text = { Text("Todas las versiones") }, leadingIcon = { Icon(Icons.Default.History, null) },
+                    onClick = {
+                        menu = false
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/kosecanet/Yotuve/releases")))
+                    })
+            }
+        }
     }
     UpdateBanner()
     App.status?.let {
@@ -1012,6 +1051,10 @@ fun PlayerScreen(vm: MainVM, v: Video) {
                     if (vm.casting) CastHelper.disconnect(ctx) else castChoice = true
                 }
                 Pill(Icons.Default.PictureInPictureAlt, "Flotante") { (ctx as? MainActivity)?.enterPip() }
+                Pill(Icons.Default.LibraryMusic, "A música") {
+                    Music.add(Track(v.id, v.title, v.channel, v.duration))
+                    Toast.makeText(ctx, "Añadida al modo música", Toast.LENGTH_SHORT).show()
+                }
                 Pill(Icons.Default.Download, if (vm.dlProgress == 1f) "Descargado" else "Descargar") { vm.download(ctx, share = false) }
                 Pill(Icons.Default.Share, "Compartir") { vm.download(ctx, share = true) }
                 Pill(Icons.Default.Link, "Enlace") {

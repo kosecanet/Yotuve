@@ -2,6 +2,17 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 16/11/2026 · Modo música, menú con versión e inicio según tus 50 últimos vídeos
+
+- **Modo música** (icono de nota arriba o menú): solo sonido, con lista que se puede importar de Spotify
+  (lista, álbum o canción; se leen los nombres y el sonido sale de YouTube) o de YouTube (lista o vídeo),
+  añadir canciones buscando, y editar (subir, bajar, quitar). Controles tipo Spotify (aleatorio, anterior,
+  play/pausa, siguiente, repetir), barra de progreso, fundido entre canciones, sigue sonando con la pantalla
+  bloqueada y barra pequeña en las demás pantallas. Botón «A música» en cada vídeo.
+- **Menú** (⋮ o mantener pulsado el logo): versión actual con enlace a sus novedades y a todas las versiones.
+- **Inicio**: analiza tus últimos 50 vídeos, saca los temas y canales que se repiten y muestra novedades
+  del último mes sobre ellos con bastantes visualizaciones; descarta lo poco visto y lo ya visto.
+
 ## 16/11/2026 · Inicio basado en lo último que has visto
 
 - El inicio mezcla lo que YouTube recomienda para tus 3 últimos vídeos (el más reciente pesa más) con lo más

@@ -73,6 +73,13 @@ object PlayerCache {
         s.audio?.let { warm(it, "a", 400_000) }
     }
 
+    /** Solo audio (modo música), con su clave de caché propia. */
+    fun audioSource(ctx: Context, key: String, url: String, ua: String?, item: MediaItem.Builder): MediaSource {
+        val u = android.net.Uri.parse(url)
+        val k = "$key-${u.getQueryParameter("itag")}-${u.getQueryParameter("clen")}"
+        return ProgressiveMediaSource.Factory(factory(ctx, ua)).createMediaSource(item.setCustomCacheKey(k).build())
+    }
+
     fun newPlayer(ctx: Context): ExoPlayer {
         // Búfer corto para empezar a reproducir antes
         // Búfer mínimo para arrancar: 0,4 s (antes 0,7 s); tras un corte, 1 s

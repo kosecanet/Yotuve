@@ -22,6 +22,8 @@ object Innertube {
     /** Busca [q]. Con [next] = true devuelve la página siguiente de la última búsqueda de [q]. */
     /** Filtro de YouTube "subidos esta semana" (para tendencias sobre un tema). */
     const val THIS_WEEK = "EgIIAw%3D%3D"
+    /** Filtro de YouTube "subidos este mes". */
+    const val THIS_MONTH = "EgIIBA%3D%3D"
 
     suspend fun search(q: String, next: Boolean = false, params: String? = null): List<Video> = withContext(Dispatchers.IO) {
         val body = JSONObject().put("context", JSONObject().put("client", JSONObject()
