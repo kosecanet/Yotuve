@@ -7,6 +7,8 @@ La sección de arriba es la de la próxima versión: se usa como notas al public
 - Las canciones «auto» salen de la radio de YouTube Music: solo canciones (grabaciones de estudio primero y
   videoclips oficiales), nada de vídeos de usuarios, podcasts ni entrevistas.
 - Las canciones de Spotify y el botón «+» buscan en YouTube Music (solo canciones).
+- Botones de la lista vacía rehechos (uno debajo de otro, a todo el ancho); sin canción no salen la duración
+  ni los botones de valorar.
 
 ## 16/11/2026 · Canciones «auto» como un DJ
 

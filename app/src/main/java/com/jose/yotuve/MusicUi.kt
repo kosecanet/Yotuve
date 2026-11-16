@@ -71,12 +71,23 @@ fun MusicScreen(onBack: () -> Unit) {
                 }
             }
             if (Music.queue.isEmpty()) item {
-                Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("La lista está vacía", color = MSub)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { importOpen = true }) { Text("Importar Spotify / YouTube") }
-                        OutlinedButton(onClick = { searchOpen = true }) { Text("Buscar canciones") }
+                    Spacer(Modifier.height(14.dp))
+                    Button(onClick = { searchOpen = true }, modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
+                        Icon(Icons.Default.Search, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp)); Text("Buscar canciones", fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = { importOpen = true }, modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6B6B6B)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) {
+                        Icon(Icons.Default.Link, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp)); Text("Importar lista de Spotify o YouTube")
                     }
                 }
             }
@@ -108,7 +119,7 @@ private fun NowPlaying() {
     LaunchedEffect(Unit) {
         while (true) {
             if (Music.active) { pos = player.currentPosition; dur = player.duration.coerceAtLeast(0); playing = player.isPlaying }
-            else { pos = 0; dur = (t?.duration ?: 0) * 1000; playing = false }
+            else { pos = 0; dur = (Music.current?.duration ?: 0) * 1000; playing = false }
             delay(400)
         }
     }
@@ -127,13 +138,13 @@ private fun NowPlaying() {
                 Text(t?.artist ?: "", color = MSub, fontSize = 14.sp, maxLines = 1)
                 if (t?.auto == true) Text("Añadida sola · relacionada con lo que te gusta", color = MSub, fontSize = 11.sp)
             }
-            // Me gusta / No me gusta
+            // Me gusta / No me gusta (solo si hay canción)
             val r = Music.ratingOf(t)
-            IconButton(onClick = { Music.dislike() }, enabled = t?.id != null) {
+            if (t != null) IconButton(onClick = { Music.dislike() }, enabled = t.id != null) {
                 Icon(if (r == -1) Icons.Default.ThumbDown else Icons.Default.ThumbDownOffAlt, "No me gusta",
                     tint = if (r == -1) MRed else Color.White)
             }
-            IconButton(onClick = { Music.like() }, enabled = t?.id != null) {
+            if (t != null) IconButton(onClick = { Music.like() }, enabled = t.id != null) {
                 Icon(if (r == 1) Icons.Default.ThumbUp else Icons.Default.ThumbUpOffAlt, "Me gusta",
                     tint = if (r == 1) MRed else Color.White)
             }
