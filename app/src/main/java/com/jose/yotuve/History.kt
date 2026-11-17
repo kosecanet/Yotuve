@@ -25,6 +25,13 @@ object History {
     }
 }
 
+/** Tiempo visto de cada vídeo (segundos acumulados), para saber qué te interesa de verdad. */
+object WatchTime {
+    private fun prefs() = App.instance.getSharedPreferences("tiempo_visto", Context.MODE_PRIVATE)
+    fun add(id: String, seconds: Int) { prefs().edit().putInt(id, get(id) + seconds).apply() }
+    fun get(id: String): Int = prefs().getInt(id, 0)
+}
+
 /** Punto de reproducción de cada vídeo, para continuar donde lo dejaste. */
 object Positions {
     private fun prefs() = App.instance.getSharedPreferences("posiciones", Context.MODE_PRIVATE)

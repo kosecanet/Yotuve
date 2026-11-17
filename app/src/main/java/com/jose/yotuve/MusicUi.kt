@@ -51,7 +51,7 @@ fun MusicScreen(onBack: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var drag by remember { mutableStateOf<Track?>(null) }        // canción que se está arrastrando
     var dragOffset by remember { mutableStateOf(0f) }
-    val rowPx = with(androidx.compose.ui.platform.LocalDensity.current) { 60.dp.toPx() }
+    val rowPx = with(androidx.compose.ui.platform.LocalDensity.current) { 56.dp.toPx() }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -68,9 +68,11 @@ fun MusicScreen(onBack: () -> Unit) {
         }
         Music.status?.let { Text(it, color = MSub, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
 
-        LazyColumn(Modifier.fillMaxSize()) {
-            item { NowPlaying() }
-            item { VibeBar() }
+        // Parte fija arriba: canción actual, controles y ambiente
+        NowPlaying()
+        VibeBar()
+        // La lista ocupa el resto de la pantalla y se desplaza por su cuenta
+        LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Lista · ${Music.queue.size} canciones", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -111,7 +113,7 @@ fun MusicScreen(onBack: () -> Unit) {
                     },
                     onDragEnd = { drag = null; dragOffset = 0f })
             }
-            item { Spacer(Modifier.height(80.dp)) }
+            item { Spacer(Modifier.height(16.dp)) }
         }
     }
 
@@ -126,7 +128,7 @@ fun MusicScreen(onBack: () -> Unit) {
     if (searchOpen) SearchAddDialog(onDismiss = { searchOpen = false })
 }
 
-/** Carátula, título, barra de progreso y controles (aleatorio, anterior, play/pausa, siguiente, repetir). */
+/** Canción actual en compacto: carátula pequeña, título, valorar, barra de progreso y controles. */
 @Composable
 private fun NowPlaying() {
     val t = Music.current
@@ -142,36 +144,35 @@ private fun NowPlaying() {
             delay(400)
         }
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.fillMaxWidth(0.78f).aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MCard),
-            contentAlignment = Alignment.Center) {
-            if (t?.thumb != null) AsyncImage(t.thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            else Icon(Icons.Default.MusicNote, null, tint = MSub, modifier = Modifier.size(72.dp))
-            if (Music.loading) CircularProgressIndicator(color = MRed)
-        }
-        Spacer(Modifier.height(16.dp))
-        Text(t?.title ?: "Nada sonando", fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 2,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)).background(MCard), contentAlignment = Alignment.Center) {
+                if (t?.thumb != null) AsyncImage(t.thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Icon(Icons.Default.MusicNote, null, tint = MSub, modifier = Modifier.size(32.dp))
+                if (Music.loading) CircularProgressIndicator(color = MRed, modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(t?.artist ?: "", color = MSub, fontSize = 14.sp, maxLines = 1)
-                if (t?.auto == true) Text("Añadida sola · relacionada con lo que te gusta", color = MSub, fontSize = 11.sp)
+                Text(t?.title ?: "Nada sonando", fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(t?.artist ?: "", color = MSub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (t?.auto == true) Text("Añadida sola", color = MSub, fontSize = 11.sp)
             }
-            // Me gusta / No me gusta (solo si hay canción)
-            val r = Music.ratingOf(t)
-            if (t != null) IconButton(onClick = { Music.dislike() }, enabled = t.id != null) {
-                Icon(if (r == -1) Icons.Default.ThumbDown else Icons.Default.ThumbDownOffAlt, "No me gusta",
-                    tint = if (r == -1) MRed else Color.White)
-            }
-            if (t != null) IconButton(onClick = { Music.like() }, enabled = t.id != null) {
-                Icon(if (r == 1) Icons.Default.ThumbUp else Icons.Default.ThumbUpOffAlt, "Me gusta",
-                    tint = if (r == 1) MRed else Color.White)
+            if (t != null) {
+                val r = Music.ratingOf(t)
+                IconButton(onClick = { Music.dislike() }, enabled = t.id != null, modifier = Modifier.size(40.dp)) {
+                    Icon(if (r == -1) Icons.Default.ThumbDown else Icons.Default.ThumbDownOffAlt, "No me gusta",
+                        tint = if (r == -1) MRed else Color.White, modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = { Music.like() }, enabled = t.id != null, modifier = Modifier.size(40.dp)) {
+                    Icon(if (r == 1) Icons.Default.ThumbUp else Icons.Default.ThumbUpOffAlt, "Me gusta",
+                        tint = if (r == 1) MRed else Color.White, modifier = Modifier.size(20.dp))
+                }
             }
         }
-        Spacer(Modifier.height(8.dp))
         val frac = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f
         Slider(value = dragging ?: frac, onValueChange = { dragging = it },
             onValueChangeFinished = { dragging?.let { Music.seek((it * dur).toLong()) }; dragging = null },
+            modifier = Modifier.height(28.dp),
             colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color(0xFF4D4D4D)))
         Row(Modifier.fillMaxWidth()) {
             Text(mmss(((dragging ?: frac) * dur).toLong()), color = MSub, fontSize = 11.sp)
@@ -182,17 +183,13 @@ private fun NowPlaying() {
             IconButton(onClick = { Music.toggleShuffle() }) {
                 Icon(Icons.Default.Shuffle, "Aleatorio", tint = if (Music.shuffle) MRed else Color.White)
             }
-            IconButton(onClick = { Music.prev() }, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Default.SkipPrevious, "Anterior", modifier = Modifier.size(38.dp))
-            }
-            Box(Modifier.size(68.dp).clip(CircleShape).background(Color.White).clickable { Music.toggle() },
+            IconButton(onClick = { Music.prev() }) { Icon(Icons.Default.SkipPrevious, "Anterior", modifier = Modifier.size(32.dp)) }
+            Box(Modifier.size(54.dp).clip(CircleShape).background(Color.White).clickable { Music.toggle() },
                 contentAlignment = Alignment.Center) {
                 Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "Pausa" else "Reproducir",
-                    tint = Color.Black, modifier = Modifier.size(40.dp))
+                    tint = Color.Black, modifier = Modifier.size(32.dp))
             }
-            IconButton(onClick = { Music.next() }, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Default.SkipNext, "Siguiente", modifier = Modifier.size(38.dp))
-            }
+            IconButton(onClick = { Music.next() }) { Icon(Icons.Default.SkipNext, "Siguiente", modifier = Modifier.size(32.dp)) }
             IconButton(onClick = { Music.cycleRepeat() }) {
                 Icon(if (Music.repeat == 2) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repetir",
                     tint = if (Music.repeat > 0) MRed else Color.White)
@@ -201,32 +198,33 @@ private fun NowPlaying() {
     }
 }
 
-/** Barra de "ambiente": una frase que guía las canciones auto (p. ej. "años 80", "alegre", "para correr"). */
+/** Ambiente en una línea: una frase que guía las canciones auto (p. ej. "años 80", "alegre"). */
 @Composable
 private fun VibeBar() {
     var text by remember { mutableStateOf(Music.vibe) }
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     fun apply() { Music.updateVibe(text); focus.clearFocus() }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        OutlinedTextField(
-            value = text, onValueChange = { text = it }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            leadingIcon = { Icon(Icons.Default.AutoAwesome, null, tint = if (Music.vibe.isNotBlank()) MRed else MSub) },
-            placeholder = { Text("Ambiente: años 80, alegre, para correr…", color = MSub) },
-            trailingIcon = {
-                if (text.isNotEmpty()) IconButton(onClick = { text = ""; Music.updateVibe(""); focus.clearFocus() }) {
-                    Icon(Icons.Default.Close, "Quitar")
-                }
-            },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { apply() }),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.White, unfocusedBorderColor = Color(0xFF4D4D4D),
-                cursorColor = Color.White),
-        )
-        Text(if (Music.vibe.isBlank()) "Escribe un ambiente y las canciones que se añaden solas lo seguirán"
-            else "Las canciones auto siguen el ambiente «${Music.vibe}»", color = MSub, fontSize = 11.sp,
-            modifier = Modifier.padding(start = 12.dp, top = 2.dp))
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).height(40.dp)
+        .clip(RoundedCornerShape(20.dp)).background(MCard).padding(start = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.AutoAwesome, null, tint = if (Music.vibe.isNotBlank()) MRed else MSub, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (text.isEmpty()) Text("Ambiente: años 80, alegre, para correr…", color = MSub, fontSize = 13.sp)
+            androidx.compose.foundation.text.BasicTextField(
+                value = text, onValueChange = { text = it }, singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 14.sp),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { apply() }),
+                modifier = Modifier.fillMaxWidth())
+        }
+        if (text.isNotEmpty()) IconButton(onClick = { text = ""; Music.updateVibe(""); focus.clearFocus() }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Close, "Quitar", modifier = Modifier.size(18.dp))
+        }
+        if (text.trim() != Music.vibe) IconButton(onClick = { apply() }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Check, "Aplicar", tint = MRed, modifier = Modifier.size(18.dp))
+        }
     }
 }
 
@@ -261,7 +259,7 @@ private fun TrackRow(i: Int, t: Track, edit: Boolean, dragging: Boolean, dragOff
                 }
             }
         }) {
-        Row(Modifier.fillMaxWidth().height(60.dp)
+        Row(Modifier.fillMaxWidth().height(56.dp)
             .background(if (dragging) Color(0xFF2A2A2A) else Color(0xFF111111))
             .then(dragMod)
             .clickable(enabled = !edit && !dragging) { Music.playAt(idx) }.padding(start = 16.dp, end = 4.dp),

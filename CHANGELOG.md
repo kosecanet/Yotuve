@@ -2,6 +2,18 @@
 
 La sección de arriba es la de la próxima versión: se usa como notas al publicar.
 
+## 17/11/2026 · Inicio por minutos vistos y modo música más compacto
+
+- Inicio: de tus últimos 50 vídeos se cogen los 5 en los que más minutos has pasado y de ellos salen las
+  10 propuestas (2 de cada uno), populares y recientes, sin repetir lo visto. La app cuenta ya los minutos
+  vistos de cada vídeo.
+- Menú ⋮: quitado «Modo música» (ya tiene su botón fuera).
+- Modo música más compacto: carátula pequeña junto al título, controles y ambiente en una línea; la lista ocupa
+  el resto y se desplaza por su cuenta (caben bastantes más canciones a la vista).
+- Ambiente: ahora mira primero las etiquetas, el género, la descripción y el año de cada canción (y luego el
+  título). Entiende décadas («años 80», «80s», «ochenta», «1985») y estados de ánimo o géneros en español
+  («alegre», «tranquilo», «fiesta», «para correr», «rock»…).
+
 ## 16/11/2026 · Ambiente para las canciones auto
 
 - Barra de texto «Ambiente» en el modo música: una frase (p. ej. «años 80», «alegre», «para correr») que guía

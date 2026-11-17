@@ -327,6 +327,27 @@ object Innertube {
         out.distinctBy { it.video.id }
     }
 
+    /** Etiquetas, descripción, categoría y año de un vídeo/canción (petición ligera). */
+    data class Meta(val tags: List<String>, val description: String, val category: String, val year: Int?)
+
+    private val metaCache = HashMap<String, Meta>()
+
+    suspend fun meta(id: String): Meta? = withContext(Dispatchers.IO) {
+        synchronized(metaCache) { metaCache[id] }?.let { return@withContext it }
+        val j = runCatching { post("player", JSONObject().put("context", ctx()).put("videoId", id)) }.getOrNull() ?: return@withContext null
+        val vd = j.optJSONObject("videoDetails")
+        val mf = j.optJSONObject("microformat")?.optJSONObject("playerMicroformatRenderer")
+        val kw = vd?.optJSONArray("keywords")
+        val desc = vd?.optString("shortDescription") ?: ""
+        // Año de la canción: "Released on: 1985-…" / "℗ 1985" en las grabaciones de estudio; si no, fecha de subida
+        val year = Regex("""Released on: (\d{4})""").find(desc)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("""℗ ?(\d{4})""").find(desc)?.groupValues?.get(1)?.toIntOrNull()
+            ?: mf?.optString("publishDate")?.take(4)?.toIntOrNull()
+        val m = Meta((0 until (kw?.length() ?: 0)).map { kw!!.getString(it) }, desc, mf?.optString("category") ?: "", year)
+        synchronized(metaCache) { metaCache[id] = m }
+        m
+    }
+
     /** Recorre todo el JSON llamando a [f] con cada objeto y su clave. */
     private fun walk(o: Any?, f: (String, JSONObject) -> Unit) {
         when (o) {

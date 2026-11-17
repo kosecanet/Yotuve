@@ -345,40 +345,46 @@ object Repo {
     }
 
     /**
-     * Inicio a partir de tus últimos 50 vídeos:
-     * - temas que se repiten en ellos → novedades del último mes sobre esos temas
-     * - tus canales más vistos → lo último que han subido
-     * - lo que YouTube recomienda para tu último vídeo
-     * Se puntúa por popularidad (visualizaciones), novedad, y coincidencia con tus temas y canales;
-     * se descarta lo poco visto, lo ya visto y se limita a 2 por canal.
+     * Inicio: de tus últimos 50 vídeos se cogen los 5 en los que más minutos has pasado (minutos vistos;
+     * para los antiguos, el punto donde lo dejaste) y de esos 5 salen las 10 propuestas, 2 de cada uno:
+     * lo que YouTube recomienda para cada uno, priorizando lo popular y lo reciente, sin repetir lo visto
+     * y con como mucho 2 vídeos por canal.
      */
     suspend fun home(history: List<Video>): List<Video> = kotlinx.coroutines.coroutineScope {
         if (history.isEmpty())
             return@coroutineScope diversify(rankFresh(runCatching { Innertube.search("tendencias", params = Innertube.THIS_WEEK) }
                 .getOrDefault(emptyList()).ifEmpty { search("tendencias", 15) }), max = 2).take(10)
         val h = history.take(50)
-        val topics = commonTopics(h, 4).ifEmpty { h.take(3).map(::keywords).filter { it.isNotBlank() } }
-        val channels = h.map { it.channel }.filter { it.isNotBlank() }.groupingBy { it }.eachCount()
-            .filter { it.value >= 2 }.entries.sortedByDescending { it.value }.take(3).map { it.key }
-        val jobs = topics.map { t -> async { runCatching { Innertube.search(t, params = Innertube.THIS_MONTH) }.getOrDefault(emptyList()) } } +
-            channels.map { c -> async { runCatching { Innertube.search(c, params = Innertube.THIS_MONTH).filter { it.channel == c } }.getOrDefault(emptyList()) } } +
-            async { runCatching { Innertube.related(h.first().id).take(10) }.getOrDefault(emptyList()) }
-        val all = jobs.map { it.await() }.flatten().distinctBy { it.id }
+        fun watched(v: Video) = WatchTime.get(v.id).takeIf { it > 0 } ?: (Positions.get(v.id) / 1000).toInt()
+        val top = h.sortedByDescending(::watched).take(5)
         val seen = h.map { it.id }.toSet()
         val now = System.currentTimeMillis() / 1000
-        val topicWords = topics.flatMap { it.split(" ") }.toSet()
-        fun score(v: Video): Double {
-            val views = (v.views ?: 0L).toDouble()
-            val days = v.timestamp?.let { ((now - it) / 86400.0).coerceAtLeast(0.0) } ?: 30.0
-            val tw = words(v.title).count { it in topicWords }
-            return kotlin.math.ln(views + 1) - days / 6.0 + tw * 1.2 + (if (v.channel in channels) 2.0 else 0.0)
+        fun score(v: Video, i: Int): Double {
+            val days = v.timestamp?.let { ((now - it) / 86400.0).coerceAtLeast(0.0) } ?: 60.0
+            return kotlin.math.ln((v.views ?: 10_000L).toDouble() + 1) * 0.7 - days / 20.0 - i * 0.25
         }
-        // "Con bastantes seguidores": fuera lo que tiene muy pocas visualizaciones (si se sabe)
-        val good = all.filter { it.id !in seen && (it.views == null || it.views >= 20_000) && (it.duration ?: 999) > 60 }
-        val feed = diversify(good.sortedByDescending(::score), max = 2, min = 10).take(10)
+        val lists = top.map { v ->
+            async {
+                runCatching { Innertube.related(v.id) }.getOrDefault(emptyList())
+                    .filter { it.id !in seen && (it.views == null || it.views >= 20_000) && (it.duration ?: 999) > 60 }
+                    .withIndex().sortedByDescending { (i, x) -> score(x, i) }.map { it.value }
+            }
+        }.map { it.await() }
+        // 2 de cada uno de los 5 (por orden de minutos vistos), sin repetir y máx. 2 por canal
+        val out = LinkedHashMap<String, Video>(); val perChannel = HashMap<String, Int>()
+        fun tryAdd(x: Video): Boolean {
+            if (x.id in out) return false
+            val c = x.channel.lowercase()
+            if ((perChannel[c] ?: 0) >= 2) return false
+            out[x.id] = x; perChannel[c] = (perChannel[c] ?: 0) + 1; return true
+        }
+        for (l in lists) { var n = 0; for (x in l) { if (n >= 2) break; if (tryAdd(x)) n++ } }
+        // Si alguno no dio suficientes, se completa con los siguientes de cada lista
+        if (out.size < 10) for (round in 0 until 10) for (l in lists) { l.firstOrNull { it.id !in out && tryAdd(it) }; if (out.size >= 10) break }
+        val feed = out.values.take(10)
         if (feed.size >= 6) return@coroutineScope feed
         // Respaldo (si YouTube no respondió): el método anterior con yt-dlp
-        val urls = h.take(3).map { mix(it.id) } + topics.take(2).map { "ytsearch8:$it" }
+        val urls = top.take(3).map { mix(it.id) }
         diversify(rankFresh(interleave(fetch(urls, 8)).filter { it.id !in seen }), max = 2, min = 10).take(10)
             .ifEmpty { search("tendencias", 10) }
     }

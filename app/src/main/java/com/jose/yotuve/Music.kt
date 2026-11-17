@@ -191,6 +191,69 @@ object Music {
         }
     }
 
+    /**
+     * Ambiente: entiende décadas ("años 80", "80s", "ochenta", "1985") y estados de ánimo/géneros en español
+     * (con sus equivalentes en inglés, que es como suelen estar las etiquetas de YouTube).
+     */
+    object Vibe {
+        data class Parsed(val words: Set<String>, val years: IntRange?, val queries: List<String>)
+        private val SYN = mapOf(
+            "alegre" to listOf("happy", "upbeat", "feel good", "alegre", "feliz"), "feliz" to listOf("happy", "feel good"),
+            "triste" to listOf("sad", "melancholic", "triste"), "tranquilo" to listOf("chill", "relax", "calm", "acoustic"),
+            "relajado" to listOf("chill", "relax", "calm"), "relax" to listOf("chill", "relax", "calm"),
+            "fiesta" to listOf("party", "dance", "fiesta"), "bailar" to listOf("dance", "party", "baile"),
+            "correr" to listOf("workout", "running", "energy", "upbeat"), "gimnasio" to listOf("workout", "gym", "energy"),
+            "romantico" to listOf("love", "romantic", "romántico"), "romántico" to listOf("love", "romantic"),
+            "rock" to listOf("rock"), "pop" to listOf("pop"), "metal" to listOf("metal"), "reggaeton" to listOf("reggaeton"),
+            "electronica" to listOf("electronic", "edm", "house"), "electrónica" to listOf("electronic", "edm", "house"),
+            "clasica" to listOf("classical"), "clásica" to listOf("classical"), "jazz" to listOf("jazz"),
+            "español" to listOf("español", "spanish"), "espanol" to listOf("español", "spanish"),
+            "infantil" to listOf("kids", "children", "infantil"), "navidad" to listOf("christmas", "navidad"))
+        private val DEC = mapOf("sesenta" to 1960, "setenta" to 1970, "ochenta" to 1980, "noventa" to 1990)
+
+        fun parse(text: String): Parsed {
+            val t = text.lowercase().trim()
+            if (t.isBlank()) return Parsed(emptySet(), null, emptyList())
+            var start: Int? = null
+            Regex("""\b(19\d\d|20[0-2]\d)\b""").find(t)?.let { val y = it.value.toInt(); start = y - y % 10 }
+            Regex("""(?:años|anos|decada|década)?\s*'?(\d0)\s*'?s?\b""").find(t)?.groupValues?.get(1)?.toIntOrNull()?.let {
+                if (start == null && it in listOf(50, 60, 70, 80, 90)) start = 1900 + it
+                else if (start == null && it in listOf(0, 10, 20)) start = 2000 + it
+            }
+            DEC.entries.firstOrNull { it.key in t }?.let { start = start ?: it.value }
+            if ("dos mil" in t || "2000s" in t) start = start ?: 2000
+            val words = t.split(Regex("""[^\p{L}\p{N}]+""")).filter { it.length > 2 && it != "años" && it != "anos" }
+            val expanded = words.flatMap { w -> SYN[w] ?: listOf(w) }.toSet()
+            val years = start?.let { it..(it + 9) }
+            val queries = buildList {
+                add(text)
+                years?.let { add("${it.first % 100}s hits"); add("éxitos años ${it.first % 100}") }
+                words.firstOrNull { it in SYN }?.let { w -> SYN[w]?.firstOrNull()?.let { add("$it music") } }
+            }.distinct()
+            return Parsed(expanded, years, queries)
+        }
+
+        /** Puntos por encajar: año, etiquetas/género, descripción y, lo último, el título. */
+        fun match(p: Parsed, m: Innertube.Meta?, v: Video): Double {
+            var sc = 0.0
+            if (p.years != null) {
+                val y = m?.year
+                sc += when { y == null -> 0.0; y in p.years -> 4.0; else -> -2.5 }
+            }
+            if (p.words.isNotEmpty()) {
+                val tags = (m?.tags ?: emptyList()).joinToString(" ").lowercase() + " " + (m?.category ?: "").lowercase()
+                val desc = (m?.description ?: "").lowercase()
+                val title = (v.title + " " + v.channel).lowercase()
+                for (w in p.words) {
+                    if (w in tags) sc += 2.0
+                    if (w in desc) sc += 1.5
+                    if (w in title) sc += 0.5
+                }
+            }
+            return sc
+        }
+    }
+
     /** Versiones que no queremos en la radio: directos, conciertos, karaoke, versiones aceleradas… */
     private val BAD = Regex("""\b(live|en vivo|en directo|directo|concierto|concert|tour|festival|session|sesi[oó]n|""" +
         """karaoke|cover|reacci[oó]n|reaction|tutorial|8d|slowed|reverb|sped ?up|nightcore|instrumental|""" +
@@ -219,35 +282,38 @@ object Music {
                 runCatching { Innertube.musicRadio(id) }.getOrDefault(emptyList()).mapIndexed { i, s -> Triple(s, si, i) }
             } }.flatMap { it.await() }
         }
-        // Ambiente: canciones que encajan con la frase (sola y junto al artista actual, para no alejarse del estilo)
-        val vibeWords = vibe.lowercase().split(Regex("""\s+""")).filter { it.length > 2 }.toSet()
+        // Ambiente: canciones que encajan con la frase (sola, por década y junto al artista actual)
+        val v = Vibe.parse(vibe)
         val vibeSongs = if (vibe.isBlank()) emptyList() else kotlinx.coroutines.coroutineScope {
-            listOfNotNull(vibe, current?.artist?.takeIf { it.isNotBlank() }?.let { "$it $vibe" },
-                liked.randomOrNull()?.artist?.let { "$it $vibe" })
+            (v.queries + listOfNotNull(current?.artist?.takeIf { it.isNotBlank() }?.let { "$it $vibe" },
+                liked.randomOrNull()?.artist?.let { "$it $vibe" }))
                 .map { q -> async { runCatching { Innertube.musicSearch(q) }.getOrDefault(emptyList()) } }
                 .flatMap { it.await() }.mapIndexed { i, s -> Triple(s, 9, i) }   // 9 = viene del ambiente
         }
         // Solo canciones: estudio (ATV) o videoclip oficial (OMV); nada subido por usuarios, podcasts ni directos
         val cands = (radio + vibeSongs).filter { (s, _, _) ->
-            val v = s.video
-            s.type in setOf("ATV", "OMV") && v.id !in used && (v.duration == null || v.duration in 90..480) &&
-                !BAD.containsMatchIn(v.title)
+            val x = s.video
+            s.type in setOf("ATV", "OMV") && x.id !in used && (x.duration == null || x.duration in 90..480) &&
+                !BAD.containsMatchIn(x.title)
         }.distinctBy { it.first.video.id }
         if (cands.isEmpty()) return pickRelatedYoutube(used, recentArtists, likedArtists, badArtists)
         fun score(c: Triple<Innertube.Song, Int, Int>): Double {
             val (s, si, i) = c
             val a = artistKey(s.video.channel)
             var sc = if (s.type == "ATV") 2.0 else 1.0                       // grabación de estudio primero
-            if (vibe.isNotBlank()) {                                          // encaja con el ambiente
-                if (si == 9) sc += 3.0 - i * 0.05
-                val txt = (s.video.title + " " + s.video.channel).lowercase()
-                sc += vibeWords.count { it in txt } * 1.0
-            }
+            if (vibe.isNotBlank() && si == 9) sc += 1.5 - i * 0.03           // sale de buscar el ambiente
             if (a in likedArtists) sc += 1.0
             if (a in badArtists) sc -= 6.0
             sc -= recentArtists.count { it == a } * 3.5                       // variar de artista, como un DJ
             if (si != 9) sc -= i * 0.12 + si * 0.4                            // la radio ya viene por parecido
             return sc + Math.random() * 1.2
+        }
+        // Con ambiente: de las 15 mejores, se miran etiquetas, género, descripción y año (antes que el título)
+        if (vibe.isNotBlank()) {
+            val top = cands.sortedByDescending(::score).take(15)
+            val metas = kotlinx.coroutines.coroutineScope { top.map { c -> async { Innertube.meta(c.first.video.id) } }.map { it.await() } }
+            val best = top.zip(metas).maxBy { (c, m) -> score(c) + Vibe.match(v, m, c.first.video) }.first.first.video
+            return Track(best.id, cleanTitle(best.title), best.channel, best.duration, auto = true)
         }
         val best = cands.maxBy(::score).first.video
         return Track(best.id, cleanTitle(best.title), best.channel, best.duration, auto = true)

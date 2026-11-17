@@ -573,7 +573,11 @@ class MainVM : ViewModel() {
         viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(10_000)
-                if (PlayerHolder.current()?.isPlaying == true || casting) saveProgress()
+                if (PlayerHolder.current()?.isPlaying == true || casting) {
+                    saveProgress()
+                    // Minutos vistos de cada vídeo (no cuentan Shorts ni música)
+                    if (!shortsOpen && !Music.active) PlayerHolder.loadedId?.takeIf { it.length == 11 }?.let { WatchTime.add(it, 10) }
+                }
             }
         }
     }
@@ -792,8 +796,6 @@ fun TopBar(onSearch: () -> Unit, onHome: () -> Unit, onMusic: () -> Unit = {}) {
                 }.getOrDefault("" to 0L)
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Modo música") }, leadingIcon = { Icon(Icons.Default.MusicNote, null) },
-                    onClick = { menu = false; onMusic() })
                 DropdownMenuItem(text = { Text("Versión $vName · novedades") }, leadingIcon = { Icon(Icons.Default.Info, null) },
                     onClick = {
                         menu = false
