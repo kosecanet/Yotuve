@@ -71,6 +71,7 @@ jobs:
         with:
           name: yotuve-1.${{ env.VC }}
           path: out/*arm64*.apk
+          retention-days: 1
 
       - name: Notas de la versión (primera sección de CHANGELOG.md)
         if: github.event_name == 'push' || inputs.publicar
